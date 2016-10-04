@@ -17,7 +17,9 @@
 //  Modified by Paul Riseborough
 
 #include <AP_HAL/AP_HAL.h>
+#include <math.h>
 #include "AP_PitchController.h"
+#include <DataFlash/DataFlash.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -106,6 +108,7 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] = {
     AP_GROUPINFO("K1UP",  13, AP_PitchController, adap.K1_upper_limit, 15),
     AP_GROUPINFO("K1LOW", 14, AP_PitchController, adap.K1_lower_limit, -15),
     AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.0001),
+    AP_GROUPINFO("K2",    16, AP_PitchController, adap.K2, 0.42),
     
 	AP_GROUPEND
 };
@@ -378,11 +381,11 @@ float AP_PitchController::adaptive_control(float theta_error)
     dt = (now - adap.last_run_us) * 1.0e-6f;
     adap.last_run_us = now;
     // Companion Model
-    adap.theta_cm += dt*(adap.alpha * adap.theta_cm + adap.alpha *  theta - V_air*cosf(phi) * adap.K1_hat +
+    adap.theta_cm += dt*(-adap.alpha * adap.theta_cm + adap.alpha *  theta - V_air*cosf(phi) * adap.K1_hat +
                          V_air*cosf(phi) * adap.K2 * adap.delta_elev);
 
     // Parameter Update
-    adap.K1_hat += dt*(adap.gamma * (theta * adap.theta_cm) * V_air * cosf(phi));
+    adap.K1_hat += dt*(-adap.gamma * (theta * adap.theta_cm) * V_air * cosf(phi));
 
     // Protection for robustness of K1
     adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
@@ -396,5 +399,11 @@ float AP_PitchController::adaptive_control(float theta_error)
     if (control > adap.deadband || control < -adap.deadband) {
         adap.delta_elev = (adap.K1_hat_lowpass + adap.alpha*theta_error)/control;
     }
+
+    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,K1H,K1HL,DE,TCM,TErr", "Qfffff",
+                                           now, adap.K1_hat, adap.K1_hat_lowpass,
+                                           adap.delta_elev, adap.theta_cm,
+                                           degrees(theta_error));
+    
     return constrain_float(adap.delta_elev, -1, 1);
 }
