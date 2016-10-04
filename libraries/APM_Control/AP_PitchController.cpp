@@ -98,6 +98,15 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] = {
 	// @User: User
 	AP_GROUPINFO("FF",        8, AP_PitchController, gains.FF,       0.0f),
 
+    // adaptive control parameters
+    AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
+    AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 3),
+    AP_GROUPINFO("GAMMA", 11, AP_PitchController, adap.gamma, 100),
+    AP_GROUPINFO("W0",    12, AP_PitchController, adap.W0, 1000),
+    AP_GROUPINFO("K1UP",  13, AP_PitchController, adap.K1_upper_limit, 15),
+    AP_GROUPINFO("K1LOW", 14, AP_PitchController, adap.K1_lower_limit, -15),
+    AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.0001),
+    
 	AP_GROUPEND
 };
 
@@ -303,6 +312,11 @@ int32_t AP_PitchController::get_servo_out(int32_t angle_err, float scaler, bool 
 	float rate_offset;
 	bool inverted;
 
+    if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700) {
+        // the user has enabled adaptive control test code
+        return adaptive_control(radians(angle_err*0.01f)) * 4500;
+    }
+    
     if (gains.tau < 0.1f) {
         gains.tau.set(0.1f);
     }
@@ -336,4 +350,51 @@ int32_t AP_PitchController::get_servo_out(int32_t angle_err, float scaler, bool 
 void AP_PitchController::reset_I()
 {
 	_pid_info.I = 0;
+}
+
+
+/*
+  adaptive control test code. Maths thanks to Ryan Beall
+ */
+float AP_PitchController::adaptive_control(float theta_error)
+{
+    float dt;
+    float theta = _ahrs.pitch; 			//pitch from ahrs/ekf
+    float phi = _ahrs.roll;			//roll from hrs/ekf
+    float V_air = 0;
+
+    // get airspeed estimate
+    _ahrs.airspeed_estimate(&V_air);
+
+    uint64_t now = AP_HAL::micros64();
+    if (adap.last_run_us == 0 || now - adap.last_run_us > 200000UL) {
+        // reset after not running for 0.2s
+        adap.theta_cm = 0;
+        adap.last_run_us = now;
+        adap.delta_elev = 0;
+        return 0;
+    }
+
+    dt = (now - adap.last_run_us) * 1.0e-6f;
+    adap.last_run_us = now;
+    // Companion Model
+    adap.theta_cm += dt*(adap.alpha * adap.theta_cm + adap.alpha *  theta - V_air*cosf(phi) * adap.K1_hat +
+                         V_air*cosf(phi) * adap.K2 * adap.delta_elev);
+
+    // Parameter Update
+    adap.K1_hat += dt*(adap.gamma * (theta * adap.theta_cm) * V_air * cosf(phi));
+
+    // Protection for robustness of K1
+    adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
+
+    // L1 implementation of lowpass
+    float alpha_filt = dt * adap.W0 / (1 + dt * adap.W0); //local variable for quick discrete calculation of lowpass
+    adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat - adap.K1_hat_lowpass);
+
+    // Control output
+    float control = V_air*cosf(phi)*adap.K2;
+    if (control > adap.deadband || control < -adap.deadband) {
+        adap.delta_elev = (adap.K1_hat_lowpass + adap.alpha*theta_error)/control;
+    }
+    return constrain_float(adap.delta_elev, -1, 1);
 }
