@@ -385,7 +385,7 @@ float AP_PitchController::adaptive_control(float theta_error)
                          V_air*cosf(phi) * adap.K2 * adap.delta_elev);
 
     // Parameter Update
-    adap.K1_hat += dt*(-adap.gamma * (theta * adap.theta_cm) * V_air * cosf(phi));
+    adap.K1_hat += dt*(-adap.gamma * (theta - adap.theta_cm) * V_air * cosf(phi));
 
     // Protection for robustness of K1
     adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
@@ -400,10 +400,15 @@ float AP_PitchController::adaptive_control(float theta_error)
         adap.delta_elev = (adap.K1_hat_lowpass + adap.alpha*theta_error)/control;
     }
 
-    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,K1H,K1HL,DE,TCM,TErr", "Qfffff",
-                                           now, adap.K1_hat, adap.K1_hat_lowpass,
+    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,K1H,K1HL,DE,TCM,TErr,Roll,Pitch,VAir", "Qfffffffff",
+                                           now,
+                                           dt,
+                                           adap.K1_hat, adap.K1_hat_lowpass,
                                            adap.delta_elev, adap.theta_cm,
-                                           degrees(theta_error));
+                                           degrees(theta_error),
+                                           degrees(phi),
+                                           degrees(theta),
+                                           V_air);
     
     return constrain_float(adap.delta_elev, -1, 1);
 }
