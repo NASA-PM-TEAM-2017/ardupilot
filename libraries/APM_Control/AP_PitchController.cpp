@@ -15,6 +15,7 @@
 
 //	Initial Code by Jon Challinger
 //  Modified by Paul Riseborough
+//  Adaptive Control by Ryan Beall
 
 #include <AP_HAL/AP_HAL.h>
 #include <math.h>
@@ -102,12 +103,12 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] = {
 
     // adaptive control parameters
     AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-    AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 3),
-    AP_GROUPINFO("GAMMA", 11, AP_PitchController, adap.gamma, 100),
-    AP_GROUPINFO("W0",    12, AP_PitchController, adap.W0, 1000),
-    AP_GROUPINFO("K1UP",  13, AP_PitchController, adap.K1_upper_limit, 15),
-    AP_GROUPINFO("K1LOW", 14, AP_PitchController, adap.K1_lower_limit, -15),
-    AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.0001),
+    AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 20),
+    AP_GROUPINFO("GAMMA", 11, AP_PitchController, adap.gamma, 0.5),
+    AP_GROUPINFO("W0",    12, AP_PitchController, adap.W0, 100),
+    AP_GROUPINFO("K1UP",  13, AP_PitchController, adap.K1_upper_limit, 1),
+    AP_GROUPINFO("K1LOW", 14, AP_PitchController, adap.K1_lower_limit, -1),
+    AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.026),
     AP_GROUPINFO("K2",    16, AP_PitchController, adap.K2, 0.42),
     
 	AP_GROUPEND
@@ -362,7 +363,7 @@ void AP_PitchController::reset_I()
 float AP_PitchController::adaptive_control(float theta_error)
 {
     float dt;
-    float theta = _ahrs.pitch; 			//pitch from ahrs/ekf
+    float theta = _ahrs.pitch; 		 //pitch from ahrs/ekf
     float phi = _ahrs.roll;			//roll from hrs/ekf
     float V_air = 0;
 
@@ -372,39 +373,44 @@ float AP_PitchController::adaptive_control(float theta_error)
     uint64_t now = AP_HAL::micros64();
     if (adap.last_run_us == 0 || now - adap.last_run_us > 200000UL) {
         // reset after not running for 0.2s
-        adap.theta_cm = 0;
+        adap.theta_cm = theta;
         adap.last_run_us = now;
         adap.delta_elev = 0;
         return 0;
-    }
+    }    
 
     dt = (now - adap.last_run_us) * 1.0e-6f;
     adap.last_run_us = now;
+
+    float theta_command = theta_error + theta;
+
     // Companion Model
-    adap.theta_cm += dt*(-adap.alpha * adap.theta_cm + adap.alpha *  theta - V_air*cosf(phi) * adap.K1_hat +
-                         V_air*cosf(phi) * adap.K2 * adap.delta_elev);
+    adap.theta_cm += dt*(-adap.alpha*(theta_command - adap.theta_cm) + adap.alpha*(theta - adap.theta_cm) - (V_air*cosf(phi)*adap.K1_hat - V_air*cosf(phi)*adap.delta_elev*adap.K2));          float model_error = adap.theta_cm - theta; 
+    
+    if (fabsf(model_error) > radians(adap.deadband)) {          
+           // Parameter Update
+           adap.K1_hat += dt*(-adap.gamma * (theta - adap.theta_cm) * V_air * cosf(phi));
+           // Protection for robustness of K1
+           adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
+           //  lowpass filter adaptive estimate
+           float alpha_filt = (dt * adap.W0 / (1 + dt * adap.W0)); //local variable for quick discrete calculation of lowpass time constant
+           alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
+           adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat);
+        }
 
-    // Parameter Update
-    adap.K1_hat += dt*(-adap.gamma * (theta - adap.theta_cm) * V_air * cosf(phi));
-
-    // Protection for robustness of K1
-    adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
-
-    // L1 implementation of lowpass
-    float alpha_filt = dt * adap.W0 / (1 + dt * adap.W0); //local variable for quick discrete calculation of lowpass
-    adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat - adap.K1_hat_lowpass);
-
-    // Control output
-    float control = V_air*cosf(phi)*adap.K2;
-    if (control > adap.deadband || control < -adap.deadband) {
-        adap.delta_elev = (adap.K1_hat_lowpass + adap.alpha*theta_error)/control;
-    }
+     // Control output
+     float control = V_air*cosf(phi)*adap.K2;
+   
+     if (fabsf(control) > 0.0001) {
+            adap.delta_elev = (adap.K1_hat_lowpass/adap.K2) + ((adap.alpha*(theta_command - theta) + adap.alpha*(theta_command - adap.theta_cm))/control); 
+        }
 
     DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,K1H,K1HL,DE,TCM,TErr,Roll,Pitch,VAir", "Qfffffffff",
                                            now,
                                            dt,
                                            adap.K1_hat, adap.K1_hat_lowpass,
-                                           adap.delta_elev, adap.theta_cm,
+                                           adap.delta_elev,
+                                           degrees(adap.theta_cm),
                                            degrees(theta_error),
                                            degrees(phi),
                                            degrees(theta),
