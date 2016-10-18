@@ -104,11 +104,11 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] = {
     // adaptive control parameters
     AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
     AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 20),
-    AP_GROUPINFO("GAMMA", 11, AP_PitchController, adap.gamma, 0.5),
+    AP_GROUPINFO("GAMMA", 11, AP_PitchController, adap.gamma, 0.03),
     AP_GROUPINFO("W0",    12, AP_PitchController, adap.W0, 100),
     AP_GROUPINFO("K1UP",  13, AP_PitchController, adap.K1_upper_limit, 1),
     AP_GROUPINFO("K1LOW", 14, AP_PitchController, adap.K1_lower_limit, -1),
-    AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.026),
+    AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.25),
     AP_GROUPINFO("K2",    16, AP_PitchController, adap.K2, 0.42),
     
 	AP_GROUPEND
@@ -403,7 +403,7 @@ float AP_PitchController::adaptive_control(float theta_error)
    
      if (fabsf(control) > 0.0001) {
             adap.delta_elev = (adap.K1_hat_lowpass/adap.K2) + ((adap.alpha*(theta_command - theta) + adap.alpha*(theta_command - adap.theta_cm))/control); 
-        }
+     }
 
     DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,K1H,K1HL,DE,TCM,TErr,Roll,Pitch,VAir", "Qfffffffff",
                                            now,
