@@ -54,4 +54,26 @@ private:
 
 	AP_AHRS &_ahrs;
 
+    /*
+      adaptive control test code. Maths from Ryan Beall
+     */
+    struct {
+        AP_Int8  enable_chan;
+        AP_Float alpha;
+        AP_Float gamma;
+        AP_Float W0;
+        AP_Float K1_upper_limit;
+        AP_Float K1_lower_limit;
+        AP_Float deadband;
+        AP_Float K2;
+
+        uint64_t last_run_us;
+        float delta_aileron;
+        float K1_hat;
+        float K1_hat_lowpass;
+        float phi_cm;
+    } adap;
+
+    // return desired roll command from -1 to 1 given roll error in radians
+    float adaptive_control(float roll_error);
 };

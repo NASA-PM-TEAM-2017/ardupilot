@@ -415,6 +415,12 @@ float AP_PitchController::adaptive_control(float theta_error)
                                            degrees(phi),
                                            degrees(theta),
                                            V_air);
+
+    _pid_info.P = adap.K1_hat;
+    _pid_info.I = 0.98 * _pid_info.I + 0.02 * adap.K1_hat_lowpass;
+    _pid_info.FF = adap.K1_hat_lowpass;
+    _pid_info.D = adap.theta_cm;
+    _pid_info.desired = adap.delta_elev;
     
     return constrain_float(adap.delta_elev, -1, 1);
 }
