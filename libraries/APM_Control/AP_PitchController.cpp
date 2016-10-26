@@ -22,6 +22,7 @@
 #include "AP_PitchController.h"
 #include <DataFlash/DataFlash.h>
 
+
 extern const AP_HAL::HAL& hal;
 
 const AP_Param::GroupInfo AP_PitchController::var_info[] = {
@@ -385,18 +386,21 @@ float AP_PitchController::adaptive_control(float theta_error)
     float theta_command = theta_error + theta;
 
     // Companion Model
-    adap.theta_cm += dt*(-adap.alpha*(theta_command - adap.theta_cm) + adap.alpha*(theta - adap.theta_cm) - (V_air*cosf(phi)*adap.K1_hat - V_air*cosf(phi)*adap.delta_elev*adap.K2));          float model_error = adap.theta_cm - theta; 
+    adap.theta_cm += dt*(-adap.alpha*(theta_command - adap.theta_cm) + adap.alpha*(theta - adap.theta_cm) - (V_air*cosf(phi)*adap.K1_hat - V_air*cosf(phi)*adap.delta_elev*adap.K2));         
+    float model_error = adap.theta_cm - theta; 
     
     if (fabsf(model_error) > radians(adap.deadband)) {          
            // Parameter Update
            adap.K1_hat += dt*(-adap.gamma * (theta - adap.theta_cm) * V_air * cosf(phi));
            // Protection for robustness of K1
            adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
-           //  lowpass filter adaptive estimate
-           float alpha_filt = (dt * adap.W0 / (1 + dt * adap.W0)); //local variable for quick discrete calculation of lowpass time constant
-           alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
-           adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat);
         }
+
+     //  lowpass filter adaptive estimate
+     float alpha_filt = (dt * adap.W0 / (1 + dt * adap.W0)); //local variable for quick discrete calculation of lowpass time constant
+     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
+     adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat);
+       
 
      // Control output
      float control = V_air*cosf(phi)*adap.K2;
