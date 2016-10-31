@@ -99,15 +99,15 @@ AP_GROUPINFO("TCONST", 0, AP_PitchController, gains.tau, 0.5f),
 
 	// adaptive control parameters
 	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-	AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 4),
-	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 0.03),
-        AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 0.03),
-	AP_GROUPINFO("THETAU",  13, AP_PitchController, adap.theta_upper_limit, 1),
-	AP_GROUPINFO("THETAL", 14, AP_PitchController, adap.theta_lower_limit, -1),
-        AP_GROUPINFO("OMEGAU",  15, AP_PitchController, adap.omega_upper_limit, 1),
-	AP_GROUPINFO("OMEGAL", 16, AP_PitchController, adap.omega_lower_limit, -1),
+	AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 4.5),
+	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 10),
+        AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 10),
+	AP_GROUPINFO("THETAU",  13, AP_PitchController, adap.theta_upper_limit, 10),
+	AP_GROUPINFO("THETAL", 14, AP_PitchController, adap.theta_lower_limit, -10),
+        AP_GROUPINFO("OMEGAU",  15, AP_PitchController, adap.omega_upper_limit, 10),
+	AP_GROUPINFO("OMEGAL", 16, AP_PitchController, adap.omega_lower_limit, -10),
 	AP_GROUPINFO("DBAND", 17, AP_PitchController, adap.deadband, 0),
-        AP_GROUPINFO("W0",18, AP_PitchController, adap.w0, 10),
+        AP_GROUPINFO("W0",18, AP_PitchController, adap.w0, 9),
     
 	AP_GROUPEND
 };
@@ -392,13 +392,13 @@ float AP_PitchController::adaptive_control(float r)
 
     
     // State Predictor
-    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*adap.x));       
-    float x_error = adap.x-adap.x_m; 
+    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x));       
+    float x_error = adap.x_m-x; 
     
     if (fabsf(x_error) > radians(adap.deadband)) {          
       // Parameter Update
-      adap.theta += dt*(-adap.gamma_theta*adap.x*x_error);
-      adap.omega += dt*(-adap.gamma_omega*adap.x*x_error);
+      adap.theta += dt*(-adap.gamma_theta*x*x_error);
+      adap.omega += dt*(-adap.gamma_omega*adap.u_lowpass*x_error);
 
       // Projection operator
       adap.theta = constrain_float(adap.theta, adap.theta_lower_limit, adap.theta_upper_limit);
@@ -407,7 +407,7 @@ float AP_PitchController::adaptive_control(float r)
         }
        
      // u (controller output to plant)
-     float eta = r - adap.theta*adap.x - adap.omega*adap.u;
+     float eta = r - adap.theta*x - adap.omega*adap.u_lowpass;
      adap.u += dt*(eta);
 
      //  lowpass u (command signal out)
@@ -416,7 +416,7 @@ float AP_PitchController::adaptive_control(float r)
      adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
 
 
-    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Aeta,Axm,Ax,Ar,Axerr", "Qffffffff",
+    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qfffffffff",
                                            now,
                                            dt,
                                            adap.theta, 
@@ -425,7 +425,8 @@ float AP_PitchController::adaptive_control(float r)
                                            degrees(adap.x_m),
 					   degrees(x),
 					   degrees(r),
-                                           degrees(x_error));
+                                           degrees(x_error),
+					   degrees(adap.u_lowpass));
  
 
     _pid_info.P = adap.theta;
