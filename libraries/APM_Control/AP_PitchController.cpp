@@ -3,25 +3,20 @@
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation, either version 3 of the License, or
    (at your option) any later version.
-
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
-
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-//	Initial Code by Jon Challinger
+//  Initial Code by Jon Challinger
 //  Modified by Paul Riseborough
 //  Adaptive Control by Ryan Beall
 
 #include <AP_HAL/AP_HAL.h>
-#include <math.h>
 #include "AP_PitchController.h"
-#include <DataFlash/DataFlash.h>
-
 
 extern const AP_HAL::HAL& hal;
 
@@ -34,7 +29,7 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] = {
 	// @Units: seconds
 	// @Increment: 0.1
 	// @User: Advanced
-	AP_GROUPINFO("TCONST",      0, AP_PitchController, gains.tau,       0.5f),
+AP_GROUPINFO("TCONST", 0, AP_PitchController, gains.tau, 0.5f),
 
 	// @Param: P
 	// @DisplayName: Proportional Gain
@@ -102,15 +97,17 @@ const AP_Param::GroupInfo AP_PitchController::var_info[] = {
 	// @User: User
 	AP_GROUPINFO("FF",        8, AP_PitchController, gains.FF,       0.0f),
 
-    // adaptive control parameters
-    AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-    AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 20),
-    AP_GROUPINFO("GAMMA", 11, AP_PitchController, adap.gamma, 0.03),
-    AP_GROUPINFO("W0",    12, AP_PitchController, adap.W0, 100),
-    AP_GROUPINFO("K1UP",  13, AP_PitchController, adap.K1_upper_limit, 1),
-    AP_GROUPINFO("K1LOW", 14, AP_PitchController, adap.K1_lower_limit, -1),
-    AP_GROUPINFO("DBAND", 15, AP_PitchController, adap.deadband, 0.25),
-    AP_GROUPINFO("K2",    16, AP_PitchController, adap.K2, 0.42),
+	// adaptive control parameters
+	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
+	AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 4),
+	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 0.03),
+        AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 0.03),
+	AP_GROUPINFO("THETAU",  13, AP_PitchController, adap.theta_upper_limit, 1),
+	AP_GROUPINFO("THETAL", 14, AP_PitchController, adap.theta_lower_limit, -1),
+        AP_GROUPINFO("OMEGAU",  15, AP_PitchController, adap.omega_upper_limit, 1),
+	AP_GROUPINFO("OMEGAL", 16, AP_PitchController, adap.omega_lower_limit, -1),
+	AP_GROUPINFO("DBAND", 17, AP_PitchController, adap.deadband, 0),
+        AP_GROUPINFO("W0",18, AP_PitchController, adap.w0, 10),
     
 	AP_GROUPEND
 };
@@ -141,7 +138,7 @@ int32_t AP_PitchController::_get_rate_out(float desired_rate, float scaler, bool
 	float omega_y = _ahrs.get_gyro().y;
 	
 	// Calculate the pitch rate error (deg/sec) and scale
-    float achieved_rate = ToDeg(omega_y);
+	float achieved_rate = ToDeg(omega_y);
 	float rate_error = (desired_rate - achieved_rate) * scaler;
 	
 	// Multiply pitch rate error by _ki_rate and integrate
@@ -293,9 +290,9 @@ float AP_PitchController::_get_coordination_rate_offset(float &aspeed, bool &inv
     } else {
         rate_offset = cosf(_ahrs.pitch)*fabsf(ToDeg((GRAVITY_MSS / MAX((aspeed * _ahrs.get_EAS2TAS()) , float(aparm.airspeed_min))) * tanf(bank_angle) * sinf(bank_angle))) * _roll_ff;
     }
-	if (inverted) {
-		rate_offset = -rate_offset;
-	}
+    if (inverted) {
+	rate_offset = -rate_offset;
+    }
     return rate_offset;
 }
 
@@ -317,11 +314,6 @@ int32_t AP_PitchController::get_servo_out(int32_t angle_err, float scaler, bool 
 	float rate_offset;
 	bool inverted;
 
-    if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700) {
-        // the user has enabled adaptive control test code
-        return adaptive_control(radians(angle_err*0.01f)) * 4500;
-    }
-    
     if (gains.tau < 0.1f) {
         gains.tau.set(0.1f);
     }
@@ -349,8 +341,15 @@ int32_t AP_PitchController::get_servo_out(int32_t angle_err, float scaler, bool 
 	// Apply the turn correction offset
 	desired_rate = desired_rate + rate_offset;
 
+	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700) {
+	  // the user has enabled adaptive control test code
+	  return adaptive_control(desired_rate);
+	}
+
+
     return _get_rate_out(desired_rate, scaler, disable_integrator, aspeed);
 }
+
 
 void AP_PitchController::reset_I()
 {
@@ -358,73 +357,82 @@ void AP_PitchController::reset_I()
 }
 
 
-/*
-  adaptive control test code. Maths thanks to Ryan Beall
- */
-float AP_PitchController::adaptive_control(float theta_error)
+float AP_PitchController::adaptive_control(float r)
 {
+  // r = command
+  // x = actual state value from sensor (i.e. pitch rate from gyro)
+  // x_m = estimated model output (i.e. estimated pitch rate given state predictor estimates)
+  // u = commanded output (i.e. delta elevator) (radians)
+  // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
+  // theta = estimated state from state predictor (unitless)
+  // omega = estimated state from state predictor (unitless)
+  // theta_upper_limit = constraint on states to ensure robustness (unitless)
+  // theta_lower_limit = constraint on states to ensure robustness (unitless)
+  // omega_upper_limit = constraint on states to ensure robustness (unitless)
+  // omega_lower_limit = constraint on states to ensure robustness (unitless)
+
     float dt;
-    float theta = _ahrs.pitch; 		 //pitch from ahrs/ekf
-    float phi = _ahrs.roll;			//roll from hrs/ekf
-    float V_air = 0;
+ 
+    float x = _ahrs.get_gyro().y; //radians
+    r = radians(r); //convert desired input into radians if required
 
-    // get airspeed estimate
-    _ahrs.airspeed_estimate(&V_air);
-
+    //reset reference model at initialization
     uint64_t now = AP_HAL::micros64();
     if (adap.last_run_us == 0 || now - adap.last_run_us > 200000UL) {
         // reset after not running for 0.2s
-        adap.theta_cm = theta;
+        adap.x_m = x;       
+        adap.u = 0;
+	adap.u_lowpass = 0;
         adap.last_run_us = now;
-        adap.delta_elev = 0;
         return 0;
     }    
 
     dt = (now - adap.last_run_us) * 1.0e-6f;
     adap.last_run_us = now;
 
-    float theta_command = theta_error + theta;
-
-    // Companion Model
-    adap.theta_cm += dt*(-adap.alpha*(theta_command - adap.theta_cm) + adap.alpha*(theta - adap.theta_cm) - (V_air*cosf(phi)*adap.K1_hat - V_air*cosf(phi)*adap.delta_elev*adap.K2));         
-    float model_error = adap.theta_cm - theta; 
     
-    if (fabsf(model_error) > radians(adap.deadband)) {          
-           // Parameter Update
-           adap.K1_hat += dt*(-adap.gamma * (theta - adap.theta_cm) * V_air * cosf(phi));
-           // Protection for robustness of K1
-           adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
+    // State Predictor
+    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*adap.x));       
+    float x_error = adap.x-adap.x_m; 
+    
+    if (fabsf(x_error) > radians(adap.deadband)) {          
+      // Parameter Update
+      adap.theta += dt*(-adap.gamma_theta*adap.x*x_error);
+      adap.omega += dt*(-adap.gamma_omega*adap.x*x_error);
+
+      // Projection operator
+      adap.theta = constrain_float(adap.theta, adap.theta_lower_limit, adap.theta_upper_limit);
+      adap.omega = constrain_float(adap.omega, adap.omega_lower_limit, adap.omega_upper_limit);
+
         }
-
-     //  lowpass filter adaptive estimate
-     float alpha_filt = (dt * adap.W0 / (1 + dt * adap.W0)); //local variable for quick discrete calculation of lowpass time constant
-     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
-     adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat);
        
+     // u (controller output to plant)
+     float eta = r - adap.theta*adap.x - adap.omega*adap.u;
+     adap.u += dt*(eta);
 
-     // Control output
-     float control = V_air*cosf(phi)*adap.K2;
-   
-     if (fabsf(control) > 0.0001) {
-            adap.delta_elev = (adap.K1_hat_lowpass/adap.K2) + ((adap.alpha*(theta_command - theta) + adap.alpha*(theta_command - adap.theta_cm))/control); 
-     }
+     //  lowpass u (command signal out)
+     float alpha_filt = (dt * adap.w0 / (1 + dt * adap.w0)); //local variable for quick discrete calculation of lowpass time constant
+     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
+     adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
 
-    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,K1H,K1HL,DE,TCM,TErr,Roll,Pitch,VAir", "Qfffffffff",
+
+    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Aeta,Axm,Ax,Ar,Axerr", "Qffffffff",
                                            now,
                                            dt,
-                                           adap.K1_hat, adap.K1_hat_lowpass,
-                                           adap.delta_elev,
-                                           degrees(adap.theta_cm),
-                                           degrees(theta_error),
-                                           degrees(phi),
-                                           degrees(theta),
-                                           V_air);
+                                           adap.theta, 
+					   adap.omega,
+                                           eta,
+                                           degrees(adap.x_m),
+					   degrees(x),
+					   degrees(r),
+                                           degrees(x_error));
+ 
 
-    _pid_info.P = adap.K1_hat;
-    _pid_info.I = 0.98 * _pid_info.I + 0.02 * adap.K1_hat_lowpass;
-    _pid_info.FF = adap.K1_hat_lowpass;
-    _pid_info.D = adap.theta_cm;
-    _pid_info.desired = adap.delta_elev;
+    _pid_info.P = adap.theta;
+    _pid_info.I = adap.omega;
+    _pid_info.FF = adap.x_m;
+    _pid_info.D = x;
+    _pid_info.desired = r;
     
-    return constrain_float(adap.delta_elev, -1, 1);
+    return constrain_float(degrees(adap.u)*100, -4500, 4500);
 }

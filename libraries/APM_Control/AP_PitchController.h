@@ -56,20 +56,27 @@ private:
     struct {
         AP_Int8  enable_chan;
         AP_Float alpha;
-        AP_Float gamma;
-        AP_Float W0;
-        AP_Float K1_upper_limit;
-        AP_Float K1_lower_limit;
+        AP_Float gamma_theta;
+	AP_Float gamma_omega;
+        AP_Float theta_upper_limit;
+        AP_Float theta_lower_limit;
+        AP_Float omega_upper_limit;
+        AP_Float omega_lower_limit;
         AP_Float deadband;
-        AP_Float K2;
+	AP_Float w0;
 
         uint64_t last_run_us;
-        float delta_elev;
-        float K1_hat;
-        float K1_hat_lowpass;
-        float theta_cm;
+        float x;
+	float x_error;
+        float eta;
+	float theta;
+	float omega;
+        float alpha_filt;
+	float u;
+        float u_lowpass;
+        float x_m;
+
     } adap;
 
-    // return desired elevator from -1 to 1 given pitch error in radians
-    float adaptive_control(float theta_error);
+    float adaptive_control(float r);
 };
