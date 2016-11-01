@@ -79,4 +79,5 @@ private:
     } adap;
 
     float adaptive_control(float r);
+    float projection_operator(float value, float value_dot, float upper_limit, float lower_limit);
 };

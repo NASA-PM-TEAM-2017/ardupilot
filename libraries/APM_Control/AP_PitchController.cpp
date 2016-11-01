@@ -393,18 +393,21 @@ float AP_PitchController::adaptive_control(float r)
     
     // State Predictor
     adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x));       
-    float x_error = adap.x_m-x; 
+    float x_error = adap.x_m-x;
+
+    float theta_dot = -adap.gamma_theta*x*x_error;
+    float omega_dot = -adap.gamma_omega*adap.u_lowpass*x_error;
+
+    //Projection Operator
+    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit);
+    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit);
+
     
     if (fabsf(x_error) > radians(adap.deadband)) {          
       // Parameter Update
-      adap.theta += dt*(-adap.gamma_theta*x*x_error);
-      adap.omega += dt*(-adap.gamma_omega*adap.u_lowpass*x_error);
-
-      // Projection operator
-      adap.theta = constrain_float(adap.theta, adap.theta_lower_limit, adap.theta_upper_limit);
-      adap.omega = constrain_float(adap.omega, adap.omega_lower_limit, adap.omega_upper_limit);
-
-        }
+      adap.theta += dt*(theta_dot);
+      adap.omega += dt*(omega_dot);
+    }
        
      // u (controller output to plant)
      float eta = r - adap.theta*x - adap.omega*adap.u_lowpass;
@@ -436,4 +439,21 @@ float AP_PitchController::adaptive_control(float r)
     _pid_info.desired = r;
     
     return constrain_float(degrees(adap.u)*100, -4500, 4500);
+}
+
+    float AP_PitchController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit)
+{
+  
+float delta = 1.5;
+ float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
+float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2);
+
+ if (f >= 0){
+    if ((f_dot*value_dot) >= 0){
+	value_dot -= (f*value_dot);
+      }
+}
+
+ return value_dot;
+
 }
