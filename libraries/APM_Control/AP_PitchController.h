@@ -58,10 +58,13 @@ private:
         AP_Float alpha;
         AP_Float gamma_theta;
 	AP_Float gamma_omega;
+	AP_Float gamma_sigma;
         AP_Float theta_upper_limit;
         AP_Float theta_lower_limit;
         AP_Float omega_upper_limit;
         AP_Float omega_lower_limit;
+	AP_Float sigma_upper_limit;
+	AP_Float sigma_lower_limit;
         AP_Float deadband;
 	AP_Float w0;
 
@@ -71,6 +74,7 @@ private:
         float eta;
 	float theta;
 	float omega;
+	float sigma;
         float alpha_filt;
 	float u;
         float u_lowpass;

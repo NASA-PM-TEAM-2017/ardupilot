@@ -102,12 +102,15 @@ AP_GROUPINFO("TCONST", 0, AP_PitchController, gains.tau, 0.5f),
 	AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 4.5),
 	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 10),
         AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 10),
-	AP_GROUPINFO("THETAU",  13, AP_PitchController, adap.theta_upper_limit, 10),
-	AP_GROUPINFO("THETAL", 14, AP_PitchController, adap.theta_lower_limit, -10),
-        AP_GROUPINFO("OMEGAU",  15, AP_PitchController, adap.omega_upper_limit, 10),
-	AP_GROUPINFO("OMEGAL", 16, AP_PitchController, adap.omega_lower_limit, -10),
-	AP_GROUPINFO("DBAND", 17, AP_PitchController, adap.deadband, 0),
-        AP_GROUPINFO("W0",18, AP_PitchController, adap.w0, 9),
+        AP_GROUPINFO("GAMMAS", 13, AP_PitchController, adap.gamma_sigma, 10),
+	AP_GROUPINFO("THETAU", 14, AP_PitchController, adap.theta_upper_limit, 10),
+	AP_GROUPINFO("THETAL", 15, AP_PitchController, adap.theta_lower_limit, -10),
+        AP_GROUPINFO("OMEGAU", 16, AP_PitchController, adap.omega_upper_limit, 10),
+	AP_GROUPINFO("OMEGAL", 17, AP_PitchController, adap.omega_lower_limit, -10),
+        AP_GROUPINFO("SIGMAU", 18, AP_PitchController, adap.sigma_upper_limit, 10),
+	AP_GROUPINFO("SIGMAL", 19, AP_PitchController, adap.sigma_lower_limit, -10),
+	AP_GROUPINFO("DBAND", 20, AP_PitchController, adap.deadband, 0),
+        AP_GROUPINFO("W0",21, AP_PitchController, adap.w0, 9),
     
 	AP_GROUPEND
 };
@@ -366,6 +369,7 @@ float AP_PitchController::adaptive_control(float r)
   // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
   // theta = estimated state from state predictor (unitless)
   // omega = estimated state from state predictor (unitless)
+  // sigma = estimated state from state predictor (unitless)
   // theta_upper_limit = constraint on states to ensure robustness (unitless)
   // theta_lower_limit = constraint on states to ensure robustness (unitless)
   // omega_upper_limit = constraint on states to ensure robustness (unitless)
@@ -381,8 +385,11 @@ float AP_PitchController::adaptive_control(float r)
     if (adap.last_run_us == 0 || now - adap.last_run_us > 200000UL) {
         // reset after not running for 0.2s
         adap.x_m = x;       
-        adap.u = 0;
-	adap.u_lowpass = 0;
+        adap.u = 0.0;
+	adap.u_lowpass = 0.0;
+	adap.theta = 0.0;
+	adap.omega = 0.0;
+	adap.sigma = 0.0;
         adap.last_run_us = now;
         return 0;
     }    
@@ -392,25 +399,27 @@ float AP_PitchController::adaptive_control(float r)
 
     
     // State Predictor
-    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x));       
+    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma));       
     float x_error = adap.x_m-x;
 
     float theta_dot = -adap.gamma_theta*x*x_error;
     float omega_dot = -adap.gamma_omega*adap.u_lowpass*x_error;
+    float sigma_dot = -adap.gamma_sigma*x_error;
 
     //Projection Operator
     theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit);
     omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit);
-
+    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit);
     
     if (fabsf(x_error) > radians(adap.deadband)) {          
       // Parameter Update
       adap.theta += dt*(theta_dot);
       adap.omega += dt*(omega_dot);
+      adap.sigma += dt*(sigma_dot);
     }
        
      // u (controller output to plant)
-     float eta = r - adap.theta*x - adap.omega*adap.u_lowpass;
+     float eta = r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
      adap.u += dt*(eta);
 
      //  lowpass u (command signal out)
@@ -419,11 +428,12 @@ float AP_PitchController::adaptive_control(float r)
      adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
 
 
-    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qfffffffff",
+    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qffffffffff",
                                            now,
                                            dt,
                                            adap.theta, 
 					   adap.omega,
+					   adap.sigma,
                                            eta,
                                            degrees(adap.x_m),
 					   degrees(x),
@@ -433,7 +443,7 @@ float AP_PitchController::adaptive_control(float r)
  
 
     _pid_info.P = adap.theta;
-    _pid_info.I = adap.omega;
+    _pid_info.I = adap.sigma;
     _pid_info.FF = adap.x_m;
     _pid_info.D = x;
     _pid_info.desired = r;
@@ -445,14 +455,14 @@ float AP_PitchController::adaptive_control(float r)
 {
   
 float delta = 1.5;
- float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
+float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
 float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2);
 
  if (f >= 0){
     if ((f_dot*value_dot) >= 0){
 	value_dot -= (f*value_dot);
       }
-}
+ }
 
  return value_dot;
 
