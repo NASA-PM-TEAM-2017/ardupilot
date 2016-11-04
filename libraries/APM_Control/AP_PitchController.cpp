@@ -349,7 +349,6 @@ int32_t AP_PitchController::get_servo_out(int32_t angle_err, float scaler, bool 
 	  return adaptive_control(desired_rate);
 	}
 
-
     return _get_rate_out(desired_rate, scaler, disable_integrator, aspeed);
 }
 

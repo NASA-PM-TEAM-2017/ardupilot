@@ -15,7 +15,7 @@
 
 //	Code by Jon Challinger
 //  Modified by Paul Riseborough
-//
+//  Adaptive Control by Ryan Beall
 
 #include <AP_HAL/AP_HAL.h>
 #include "AP_RollController.h"
@@ -81,15 +81,20 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
 	// @User: User
 	AP_GROUPINFO("FF",        6, AP_RollController, gains.FF,          0.0f),
 
-    // adaptive control parameters
-    AP_GROUPINFO_FLAGS("AD_CH", 7, AP_RollController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-    AP_GROUPINFO("ALPHA", 8, AP_RollController, adap.alpha, 20),
-    AP_GROUPINFO("GAMMA", 9, AP_RollController, adap.gamma, 0.03),
-    AP_GROUPINFO("W0",    10, AP_RollController, adap.W0, 100),
-    AP_GROUPINFO("K1UP",  11, AP_RollController, adap.K1_upper_limit, 1),
-    AP_GROUPINFO("K1LOW", 12, AP_RollController, adap.K1_lower_limit, -1),
-    AP_GROUPINFO("DBAND", 13, AP_RollController, adap.deadband, 0.25),
-    AP_GROUPINFO("K2",    14, AP_RollController, adap.K2, 0.42),
+	// adaptive control parameters
+	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_RollController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
+	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 4.5),
+	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 10),
+        AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 10),
+        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 10),
+	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_upper_limit, 10),
+	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_lower_limit, -10),
+        AP_GROUPINFO("OMEGAU", 16, AP_RollController, adap.omega_upper_limit, 10),
+	AP_GROUPINFO("OMEGAL", 17, AP_RollController, adap.omega_lower_limit, -10),
+        AP_GROUPINFO("SIGMAU", 18, AP_RollController, adap.sigma_upper_limit, 10),
+	AP_GROUPINFO("SIGMAL", 19, AP_RollController, adap.sigma_lower_limit, -10),
+	AP_GROUPINFO("DBAND", 20, AP_RollController, adap.deadband, 0),
+        AP_GROUPINFO("W0",21, AP_RollController, adap.w0, 9),
     
 	AP_GROUPEND
 };
@@ -123,6 +128,11 @@ int32_t AP_RollController::_get_rate_out(float desired_rate, float scaler, bool 
         desired_rate = gains.rmax;
     }
 	
+	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700) {
+	  // the user has enabled adaptive control test code
+	  return adaptive_control(desired_rate);
+	}
+
     // Get body rate vector (radians/sec)
 	float omega_x = _ahrs.get_gyro().x;
 	
@@ -212,11 +222,6 @@ int32_t AP_RollController::get_rate_out(float desired_rate, float scaler)
 */
 int32_t AP_RollController::get_servo_out(int32_t angle_err, float scaler, bool disable_integrator)
 {
-    if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700) {
-        // the user has enabled adaptive control test code
-        return adaptive_control(radians(angle_err*0.01f)) * 4500;
-    }
-
     if (gains.tau < 0.1f) {
         gains.tau.set(0.1f);
     }
@@ -236,65 +241,110 @@ void AP_RollController::reset_I()
 /*
   adaptive control test code. Maths thanks to Ryan Beall
  */
-float AP_RollController::adaptive_control(float phi_error)
+float AP_RollController::adaptive_control(float r)
 {
+  // r = command
+  // x = actual state value from sensor (i.e. pitch rate from gyro)
+  // x_m = estimated model output (i.e. estimated pitch rate given state predictor estimates)
+  // u = commanded output (i.e. delta elevator) (radians)
+  // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
+  // theta = estimated state from state predictor (unitless)
+  // omega = estimated state from state predictor (unitless)
+  // sigma = estimated state from state predictor (unitless)
+  // theta_upper_limit = constraint on states to ensure robustness (unitless)
+  // theta_lower_limit = constraint on states to ensure robustness (unitless)
+  // omega_upper_limit = constraint on states to ensure robustness (unitless)
+  // omega_lower_limit = constraint on states to ensure robustness (unitless)
+
     float dt;
-    float phi = _ahrs.roll; 		 //pitch from ahrs/ekf
-    float V_air = 0;
+ 
+    float x =_ahrs.get_gyro().x; //radians
+    r = radians(r); //convert desired input into radians if required
 
-    // get airspeed estimate
-    _ahrs.airspeed_estimate(&V_air);
-
+    //reset reference model at initialization
     uint64_t now = AP_HAL::micros64();
     if (adap.last_run_us == 0 || now - adap.last_run_us > 200000UL) {
         // reset after not running for 0.2s
-        adap.phi_cm = phi;
+        adap.x_m = x;       
+        adap.u = 0.0;
+	adap.u_lowpass = 0.0;
+	adap.theta = 0.0;
+	adap.omega = 0.0;
+	adap.sigma = 0.0;
         adap.last_run_us = now;
-        adap.delta_aileron = 0;
         return 0;
     }    
 
     dt = (now - adap.last_run_us) * 1.0e-6f;
     adap.last_run_us = now;
 
-    float phi_command = phi_error + phi;
-
-    // Companion Model
-    adap.phi_cm += dt*(-adap.alpha*(phi_command - adap.phi_cm) + adap.alpha*(phi - adap.phi_cm) - (V_air*adap.K1_hat - V_air*adap.delta_aileron*adap.K2));          float model_error = adap.phi_cm - phi; 
     
-    if (fabsf(model_error) > radians(adap.deadband)) {          
-           // Parameter Update
-           adap.K1_hat += dt*(-adap.gamma * (phi - adap.phi_cm) * V_air);
-           // Protection for robustness of K1
-           adap.K1_hat = constrain_float(adap.K1_hat, adap.K1_lower_limit, adap.K1_upper_limit);
-           //  lowpass filter adaptive estimate
-           float alpha_filt = (dt * adap.W0 / (1 + dt * adap.W0)); //local variable for quick discrete calculation of lowpass time constant
-           alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
-           adap.K1_hat_lowpass = (1 - alpha_filt)*adap.K1_hat_lowpass + alpha_filt*(adap.K1_hat);
-        }
+    // State Predictor
+    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma));       
+    float x_error = adap.x_m-x;
 
-     // Control output
-     float control = V_air*adap.K2;
-   
-     if (fabsf(control) > 0.0001) {
-            adap.delta_aileron = (adap.K1_hat_lowpass/adap.K2) + ((adap.alpha*(phi_command - phi) + adap.alpha*(phi_command - adap.phi_cm))/control); 
-     }
+    float theta_dot = -adap.gamma_theta*x*x_error;
+    float omega_dot = -adap.gamma_omega*adap.u_lowpass*x_error;
+    float sigma_dot = -adap.gamma_sigma*x_error;
 
-    DataFlash_Class::instance()->Log_Write("ADAR", "TimeUS,Dt,K1H,K1HL,DE,TCM,TErr,Roll,VAir", "Qffffffff",
+    //Projection Operator
+    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit);
+    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit);
+    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit);
+    
+    if (fabsf(x_error) > radians(adap.deadband)) {          
+      // Parameter Update
+      adap.theta += dt*(theta_dot);
+      adap.omega += dt*(omega_dot);
+      adap.sigma += dt*(sigma_dot);
+    }
+       
+     // u (controller output to plant)
+     float eta = r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
+     adap.u += dt*(eta);
+
+     //  lowpass u (command signal out)
+     float alpha_filt = (dt * adap.w0 / (1 + dt * adap.w0)); //local variable for quick discrete calculation of lowpass time constant
+     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
+     adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
+
+
+    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qffffffffff",
                                            now,
                                            dt,
-                                           adap.K1_hat, adap.K1_hat_lowpass,
-                                           adap.delta_aileron,
-                                           degrees(adap.phi_cm),
-                                           degrees(phi_error),
-                                           degrees(phi),
-                                           V_air);
+                                           adap.theta, 
+					   adap.omega,
+					   adap.sigma,
+                                           eta,
+                                           degrees(adap.x_m),
+					   degrees(x),
+					   degrees(r),
+                                           degrees(x_error),
+					   degrees(adap.u_lowpass));
+ 
 
-    _pid_info.P = adap.K1_hat;
-    _pid_info.I = 0.98 * _pid_info.I + 0.02 * adap.K1_hat_lowpass;
-    _pid_info.FF = adap.K1_hat_lowpass;
-    _pid_info.D = adap.phi_cm;
-    _pid_info.desired = adap.delta_aileron;
+    _pid_info.P = adap.theta;
+    _pid_info.I = adap.omega;
+    _pid_info.FF = degrees(adap.x_m);
+    _pid_info.D = degrees(x);
+    _pid_info.desired = degrees(r);
     
-    return constrain_float(adap.delta_aileron, -1, 1);
+    return constrain_float(degrees(adap.u)*100, -4500, 4500);
+}
+
+    float AP_RollController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit)
+{
+  
+float delta = 1.5;
+float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
+float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2);
+
+ if (f >= 0){
+    if ((f_dot*value_dot) >= 0){
+	value_dot -= (f*value_dot);
+      }
+ }
+
+ return value_dot;
+
 }
