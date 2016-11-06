@@ -398,11 +398,11 @@ float AP_PitchController::adaptive_control(float r)
 
     
     // State Predictor
-    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma));       
+    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u + adap.theta*x + adap.sigma));       
     float x_error = adap.x_m-x;
 
     float theta_dot = -adap.gamma_theta*x*x_error;
-    float omega_dot = -adap.gamma_omega*adap.u_lowpass*x_error;
+    float omega_dot = -adap.gamma_omega*adap.u*x_error;
     float sigma_dot = -adap.gamma_sigma*x_error;
 
     //Projection Operator
