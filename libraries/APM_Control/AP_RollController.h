@@ -87,5 +87,5 @@ private:
 
     // return desired roll command from -1 to 1 given roll error in radians
     float adaptive_control(float roll_error);
-    float projection_operator(float value, float value_dot, float upper_limit, float lower_limit);
+    float projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta);
 };
