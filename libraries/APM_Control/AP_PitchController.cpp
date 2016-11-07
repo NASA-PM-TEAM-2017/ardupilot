@@ -362,18 +362,18 @@ void AP_PitchController::reset_I()
 
 float AP_PitchController::adaptive_control(float r)
 {
-  // r = command
-  // x = actual state value from sensor (i.e. pitch rate from gyro)
-  // x_m = estimated model output (i.e. estimated pitch rate given state predictor estimates)
-  // u = commanded output (i.e. delta elevator) (radians)
-  // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
-  // theta = estimated state from state predictor (unitless)
-  // omega = estimated state from state predictor (unitless)
-  // sigma = estimated state from state predictor (unitless)
-  // theta_upper_limit = constraint on states to ensure robustness (unitless)
-  // theta_lower_limit = constraint on states to ensure robustness (unitless)
-  // omega_upper_limit = constraint on states to ensure robustness (unitless)
-  // omega_lower_limit = constraint on states to ensure robustness (unitless)
+    // r = command
+    // x = actual state value from sensor (i.e. pitch rate from gyro)
+    // x_m = estimated model output (i.e. estimated pitch rate given state predictor estimates)
+    // u = commanded output (i.e. delta elevator) (radians)
+    // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
+    // theta = estimated state from state predictor (unitless)
+    // omega = estimated state from state predictor (unitless)
+    // sigma = estimated state from state predictor (unitless)
+    // theta_upper_limit = constraint on states to ensure robustness (unitless)
+    // theta_lower_limit = constraint on states to ensure robustness (unitless)
+    // omega_upper_limit = constraint on states to ensure robustness (unitless)
+    // omega_lower_limit = constraint on states to ensure robustness (unitless)
 
     float dt;
  
@@ -386,10 +386,10 @@ float AP_PitchController::adaptive_control(float r)
         // reset after not running for 0.2s
         adap.x_m = x;       
         adap.u = 0.0;
-	adap.u_lowpass = 0.0;
-	adap.theta = 0.2;
-	adap.omega = 0.0;
-	adap.sigma = 0.0;
+        adap.u_lowpass = 0.0;
+        adap.theta = 0.2;
+        adap.omega = 0.0;
+        adap.sigma = 0.0;
         adap.last_run_us = now;
         return 0;
     }    
@@ -419,34 +419,34 @@ float AP_PitchController::adaptive_control(float r)
     
     // Parameter Update   
     if (fabsf(x_error) > radians(adap.deadband)) {                
-      adap.theta += dt*(theta_dot);
+        adap.theta += dt*(theta_dot);
     }
-      adap.omega += dt*(omega_dot);
-      adap.sigma += dt*(sigma_dot);
+    adap.omega += dt*(omega_dot);
+    adap.sigma += dt*(sigma_dot);
    
        
-     // u (controller output to plant)
-     float eta = r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
-     adap.u += dt*(eta);
+    // u (controller output to plant)
+    float eta = r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
+    adap.u += dt*(eta);
 
-     //  lowpass u (command signal out)
-     float alpha_filt = (dt * adap.w0 / (1 + dt * adap.w0)); //local variable for quick discrete calculation of lowpass time constant
-     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
-     adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
+    //  lowpass u (command signal out)
+    float alpha_filt = (dt * adap.w0 / (1 + dt * adap.w0)); //local variable for quick discrete calculation of lowpass time constant
+    alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
+    adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
 
 
     DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qffffffffff",
                                            now,
                                            dt,
                                            adap.theta, 
-					   adap.omega,
-					   adap.sigma,
+                                           adap.omega,
+                                           adap.sigma,
                                            eta,
                                            degrees(adap.x_m),
-					   degrees(x),
-					   degrees(r),
+                                           degrees(x),
+                                           degrees(r),
                                            degrees(x_error),
-					   degrees(adap.u_lowpass));
+                                           degrees(adap.u_lowpass));
  
 
     _pid_info.P = adap.theta;
@@ -461,26 +461,26 @@ float AP_PitchController::adaptive_control(float r)
 float AP_PitchController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta)
 {
   
-float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
-float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2);
+    float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
+    float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2);
 
- if (f >= 0){
-    if ((f_dot*value_dot) >= 0){
-	value_dot -= (f*value_dot);
-      }
+    if (f >= 0){
+        if ((f_dot*value_dot) >= 0){
+            value_dot -= (f*value_dot);
+        }
 
-    // for ADAP_TUNING message
-    adap.f = f;
-    adap.f_dot = f_dot;
- }
+        // for ADAP_TUNING message
+        adap.f = f;
+        adap.f_dot = f_dot;
+    }
 
- return value_dot;
+    return value_dot;
 
 }
 
 /*
   send ADAP_TUNING message
- */
+*/
 void AP_PitchController::adaptive_tuning_send(mavlink_channel_t chan)
 {
 	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700 &&
@@ -500,4 +500,3 @@ void AP_PitchController::adaptive_tuning_send(mavlink_channel_t chan)
                                      adap.u);
     }
 }
-

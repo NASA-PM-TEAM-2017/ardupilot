@@ -54,31 +54,31 @@ private:
 
     /*
       adaptive control test code. Maths from Ryan Beall
-     */
+    */
     struct {
         AP_Int8  enable_chan;
         AP_Float alpha;
         AP_Float gamma_theta;
-	AP_Float gamma_omega;
-	AP_Float gamma_sigma;
+        AP_Float gamma_omega;
+        AP_Float gamma_sigma;
         AP_Float theta_upper_limit;
         AP_Float theta_lower_limit;
         AP_Float omega_upper_limit;
         AP_Float omega_lower_limit;
-	AP_Float sigma_upper_limit;
-	AP_Float sigma_lower_limit;
+        AP_Float sigma_upper_limit;
+        AP_Float sigma_lower_limit;
         AP_Float deadband;
-	AP_Float w0;
+        AP_Float w0;
 
         uint64_t last_run_us;
         float x;
-	float x_error;
+        float x_error;
         float eta;
-	float theta;
-	float omega;
-	float sigma;
+        float theta;
+        float omega;
+        float sigma;
         float alpha_filt;
-	float u;
+        float u;
         float u_lowpass;
         float x_m;
         float theta_dot;
