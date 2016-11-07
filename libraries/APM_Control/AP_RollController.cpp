@@ -18,6 +18,7 @@
 //  Adaptive Control by Ryan Beall
 
 #include <AP_HAL/AP_HAL.h>
+#include <GCS_MAVLink/GCS.h>
 #include "AP_RollController.h"
 
 extern const AP_HAL::HAL& hal;
@@ -291,7 +292,13 @@ float AP_RollController::adaptive_control(float r)
     theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit,1.1);
     omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit,1.1);
     sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit,1.5);
- 
+
+    // for ADAP_TUNING message
+    adap.theta_dot = theta_dot;
+    adap.omega_dot = omega_dot;
+    adap.sigma_dot = sigma_dot;
+    adap.x_error = x_error;
+    
     // Parameter Update   
     if (fabsf(x_error) > radians(adap.deadband)) {           
       adap.theta += dt*(theta_dot);
@@ -344,6 +351,33 @@ float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_
       }
  }
 
+    // for ADAP_TUNING message
+    adap.f = f;
+    adap.f_dot = f_dot;
+ 
  return value_dot;
 
+}
+
+/*
+  send ADAP_TUNING message
+ */
+void AP_RollController::adaptive_tuning_send(mavlink_channel_t chan)
+{
+	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700 &&
+        HAVE_PAYLOAD_SPACE(chan, ADAP_TUNING)) {
+        mavlink_msg_adap_tuning_send(chan, PID_TUNING_ROLL, 
+                                     _pid_info.desired,
+                                     _ahrs.get_gyro().x,
+                                     adap.x_error,
+                                     adap.theta,
+                                     adap.omega,
+                                     adap.sigma,
+                                     adap.theta_dot,
+                                     adap.omega_dot,
+                                     adap.sigma_dot,
+                                     adap.f,
+                                     adap.f_dot,
+                                     adap.u);
+    }
 }

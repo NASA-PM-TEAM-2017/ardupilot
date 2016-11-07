@@ -40,6 +40,8 @@ public:
     AP_Float &kI(void) { return gains.I; }
     AP_Float &kD(void) { return gains.D; }
     AP_Float &kFF(void) { return gains.FF; }
+
+    void adaptive_tuning_send(mavlink_channel_t chan);
     
 private:
 	const AP_Vehicle::FixedWing &aparm;
@@ -83,6 +85,11 @@ private:
 	float u;
         float u_lowpass;
         float x_m;
+        float theta_dot;
+        float omega_dot;
+        float sigma_dot;
+        float f;
+        float f_dot;
     } adap;
 
     // return desired roll command from -1 to 1 given roll error in radians
