@@ -327,6 +327,7 @@ void Plane::send_pid_tuning(mavlink_channel_t chan)
                                     pid_info->P,
                                     pid_info->I,
                                     pid_info->D);
+        rollController.adaptive_tuning_send(chan);
         if (!HAVE_PAYLOAD_SPACE(chan, PID_TUNING)) {
             return;
         }
@@ -344,6 +345,7 @@ void Plane::send_pid_tuning(mavlink_channel_t chan)
                                     pid_info->P,
                                     pid_info->I,
                                     pid_info->D);
+        pitchController.adaptive_tuning_send(chan);
         if (!HAVE_PAYLOAD_SPACE(chan, PID_TUNING)) {
             return;
         }
