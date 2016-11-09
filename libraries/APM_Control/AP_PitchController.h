@@ -71,6 +71,7 @@ private:
         AP_Float w0;
 
         uint64_t last_run_us;
+	float r;
         float x;
         float x_error;
         float eta;

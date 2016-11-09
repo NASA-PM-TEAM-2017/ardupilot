@@ -378,7 +378,7 @@ float AP_PitchController::adaptive_control(float r)
     float dt;
  
     float x = _ahrs.get_gyro().y; //radians
-    r = radians(r); //convert desired input into radians if required
+    adap.r = radians(r); //convert desired input into radians if required
 
     //reset reference model at initialization
     uint64_t now = AP_HAL::micros64();
@@ -407,9 +407,9 @@ float AP_PitchController::adaptive_control(float r)
     float sigma_dot = -adap.gamma_sigma*x_error;
 
     //Projection Operator
-    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit,1.05);
-    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit,1.05);
-    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit,1.5);
+    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit,200);
+    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit,200);
+    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit,200);
 
     // for ADAP_TUNING message
     adap.theta_dot = theta_dot;
@@ -426,7 +426,7 @@ float AP_PitchController::adaptive_control(float r)
    
        
     // u (controller output to plant)
-    float eta = r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
+    float eta = adap.r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
     adap.u += dt*(eta);
 
     //  lowpass u (command signal out)
@@ -453,7 +453,7 @@ float AP_PitchController::adaptive_control(float r)
     _pid_info.I = adap.sigma;
     _pid_info.FF = adap.x_m;
     _pid_info.D = x_error;
-    _pid_info.desired = adap.omega;
+    _pid_info.desired = r;
     
     return constrain_float(degrees(adap.u_lowpass)*100, -4500, 4500);
 }
@@ -461,19 +461,22 @@ float AP_PitchController::adaptive_control(float r)
 float AP_PitchController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta)
 {
   
-    float f = (2/delta)*(sq((value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2)) + 1 - delta);
-    float f_dot = (4/delta)*(value-(upper_limit+lower_limit)/2)/((upper_limit-lower_limit)/2);
+    float y_inflection = 100;
+    float b = (upper_limit+lower_limit)/2;
+    float a = (y_inflection+delta)/sq(upper_limit-b);
+    float f = a*sq(value-b)-delta;
+    float f_dot = 2*a*(value-b);
 
     if (f >= 0){
         if ((f_dot*value_dot) >= 0){
             value_dot -= (f*value_dot);
         }
-
-        // for ADAP_TUNING message
-        adap.f = f;
-        adap.f_dot = f_dot;
     }
 
+    // for ADAP_TUNING message
+    adap.f = f;
+    adap.f_dot = f_dot;
+ 
     return value_dot;
 
 }
@@ -486,7 +489,7 @@ void AP_PitchController::adaptive_tuning_send(mavlink_channel_t chan)
 	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700 &&
         HAVE_PAYLOAD_SPACE(chan, ADAP_TUNING)) {
         mavlink_msg_adap_tuning_send(chan, PID_TUNING_PITCH, 
-                                     _pid_info.desired,
+                                     adap.r,
                                      _ahrs.get_gyro().y,
                                      adap.x_error,
                                      adap.theta,
