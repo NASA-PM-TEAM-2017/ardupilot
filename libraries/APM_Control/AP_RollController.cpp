@@ -283,6 +283,13 @@ float AP_RollController::adaptive_control(float r)
     // State Predictor
     adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma));       
     float x_error = adap.x_m-x;
+    // Constrain error to +-300 deg/s
+    x_error = constrain_float(x_error,-radians(300), radians(300));
+
+    // Constrain adaptive gain based on loop rate
+    adap.gamma_theta = constrain_float(adap.gamma_theta,0,0.0247/dt);
+    adap.gamma_omega = constrain_float(adap.gamma_omega,0,0.0247/dt);
+    adap.gamma_sigma = constrain_float(adap.gamma_sigma,0,0.0247/dt);
 
     float theta_dot = -adap.gamma_theta*x*x_error;
     float omega_dot = -adap.gamma_omega*adap.u_lowpass*x_error;
