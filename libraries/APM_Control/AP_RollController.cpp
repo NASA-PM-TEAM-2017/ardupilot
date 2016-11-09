@@ -87,15 +87,15 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
 	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 4.5),
 	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 1),
         AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 1),
-        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 0.5),
-	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_upper_limit, 0.6),
+        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 1),
+	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_upper_limit, 0.65),
 	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_lower_limit, 0.1),
         AP_GROUPINFO("OMEGAU", 16, AP_RollController, adap.omega_upper_limit, 1),
 	AP_GROUPINFO("OMEGAL", 17, AP_RollController, adap.omega_lower_limit, -1),
         AP_GROUPINFO("SIGMAU", 18, AP_RollController, adap.sigma_upper_limit, 1),
 	AP_GROUPINFO("SIGMAL", 19, AP_RollController, adap.sigma_lower_limit, -1),
 	AP_GROUPINFO("DBAND", 20, AP_RollController, adap.deadband, 0),
-        AP_GROUPINFO("W0",21, AP_RollController, adap.w0, 150),
+        AP_GROUPINFO("W0",21, AP_RollController, adap.w0, 200),
     
 	AP_GROUPEND
 };
