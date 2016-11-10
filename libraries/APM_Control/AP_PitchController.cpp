@@ -434,12 +434,13 @@ float AP_PitchController::adaptive_control(float r)
        
     // u (controller output to plant)
     float eta = adap.r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
+    eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
     adap.u += dt*(eta);
 
     //  lowpass u (command signal out)
     float alpha_filt = (dt * adap.w0 / (1 + dt * adap.w0)); //local variable for quick discrete calculation of lowpass time constant
     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
-    adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
+    adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass + alpha_filt*(adap.u);
 
 
     DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qffffffffff",
@@ -454,7 +455,7 @@ float AP_PitchController::adaptive_control(float r)
                                            degrees(r),
                                            degrees(x_error),
                                            degrees(adap.u_lowpass));
- 
+
 
     _pid_info.P = adap.theta;
     _pid_info.I = adap.sigma;
@@ -462,7 +463,7 @@ float AP_PitchController::adaptive_control(float r)
     _pid_info.D = x_error;
     _pid_info.desired = r;
     
-    return constrain_float(degrees(adap.u_lowpass)*100, -4500, 4500);
+     return degrees(constrain_float(adap.u_lowpass,radians(-45), radians(45)))*100;
 }
 
 float AP_PitchController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta)

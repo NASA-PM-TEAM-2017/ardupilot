@@ -315,6 +315,7 @@ float AP_RollController::adaptive_control(float r)
        
     // u (controller output to plant)
     float eta = adap.r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
+    eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
     adap.u += dt*(eta);
 
     //  lowpass u (command signal out)
@@ -343,7 +344,7 @@ float AP_RollController::adaptive_control(float r)
     _pid_info.D = x;
     _pid_info.desired = r;
     
-    return constrain_float(degrees(adap.u_lowpass)*100, -4500, 4500);
+    return degrees(constrain_float(adap.u_lowpass,radians(-45), radians(45)))*100;
 }
 
 float AP_RollController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta)
