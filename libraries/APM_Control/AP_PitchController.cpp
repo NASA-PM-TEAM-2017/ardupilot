@@ -414,9 +414,9 @@ float AP_PitchController::adaptive_control(float r)
     float sigma_dot = -adap.gamma_sigma*x_error;
 
     //Projection Operator
-    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit,200);
-    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit,200);
-    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit,200);
+    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit,2);
+    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit,2);
+    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit,2);
 
     // for ADAP_TUNING message
     adap.theta_dot = theta_dot;
@@ -424,14 +424,15 @@ float AP_PitchController::adaptive_control(float r)
     adap.sigma_dot = sigma_dot;
     adap.x_error = x_error;
     
-    // Parameter Update   
-    if (fabsf(x_error) > radians(adap.deadband)) {                
-        adap.theta += dt*(theta_dot);
-    }
+    // Parameter Update                  
+    adap.theta += dt*(theta_dot);
     adap.omega += dt*(omega_dot);
     adap.sigma += dt*(sigma_dot);
-   
-       
+
+    adap.theta = constrain_float(adap.theta, adap.theta_lower_limit, adap.theta_upper_limit);
+    adap.omega = constrain_float(adap.omega, adap.omega_lower_limit, adap.omega_upper_limit);
+    adap.sigma = constrain_float(adap.sigma, adap.sigma_lower_limit, adap.sigma_upper_limit);
+     
     // u (controller output to plant)
     float eta = adap.r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
     eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
@@ -469,7 +470,7 @@ float AP_PitchController::adaptive_control(float r)
 float AP_PitchController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta)
 {
   
-    float y_inflection = 100;
+    float y_inflection = 3.1562;
     float b = (upper_limit+lower_limit)/2;
     float a = (y_inflection+delta)/sq(upper_limit-b);
     float f = a*sq(value-b)-delta;
