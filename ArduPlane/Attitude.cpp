@@ -273,7 +273,7 @@ void Plane::stabilize_training(float speed_scaler)
     if (training_manual_roll) {
       if (hal.rcin->read(7-1) >= 1700) {
 	  // the user has enabled chirp control test code
-	channel_roll->set_servo_out(control_chirp());
+	channel_roll->set_servo_out(control_chirp(50));
 	}
       else{
         channel_roll->set_servo_out(channel_roll->get_control_in());
@@ -289,7 +289,13 @@ void Plane::stabilize_training(float speed_scaler)
     }
 
     if (training_manual_pitch) {
+        if (hal.rcin->read(6-1) >= 1700) {
+	  // the user has enabled chirp control test code
+	channel_pitch->set_servo_out(control_chirp(25));
+	}
+      else{
         channel_pitch->set_servo_out(channel_pitch->get_control_in());
+      }
     } else {
         stabilize_pitch(speed_scaler);
         if ((nav_pitch_cd > 0 && channel_pitch->get_control_in() < channel_pitch->get_servo_out()) ||
@@ -713,7 +719,7 @@ void Plane::update_load_factor(void)
 }
 
 
-int16_t Plane::control_chirp(void)
+int16_t Plane::control_chirp(float max_command)
 {
   float dt;
   uint64_t now = AP_HAL::micros64();
@@ -725,15 +731,16 @@ int16_t Plane::control_chirp(void)
     //return 0;
     }
   
-  dt = (now - chirp.last_run_us) * 1.0e-6f;
+   dt = (now - chirp.last_run_us) * 1.0e-6f;
+   chirp.last_run_us = now;
 
-  float f0 = 0.1;
+  float f0 = 0.01;
   float f1 = 0.5;
   float pi = 3.14159;
-  float k = (f1-f0)/10; //chirp for 10 seconds
+  float k = (f1-f0)/5; //chirp for 10 seconds
 
   float out = sinf(2*pi*(f0*chirp.t+(k/2)*chirp.t*chirp.t));
-  int16_t servo_out = 100*out*10;
+  int16_t servo_out = max_command*out*10;
 
   chirp.t += dt;
 

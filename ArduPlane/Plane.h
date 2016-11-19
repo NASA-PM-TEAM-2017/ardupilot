@@ -1141,7 +1141,7 @@ private:
         uint64_t last_run_us;
 	float t;
     }chirp;
-    int16_t control_chirp(void);
+    int16_t control_chirp(float max_command);
 
 public:
     void mavlink_delay_cb();
