@@ -722,7 +722,7 @@ int16_t Plane::control_chirp(void)
         // reset after not running for 0.2s
     chirp.t = 0;
     chirp.last_run_us = now;
-    return 0;
+    //return 0;
     }
   
   dt = (now - chirp.last_run_us) * 1.0e-6f;
@@ -733,8 +733,9 @@ int16_t Plane::control_chirp(void)
   float k = (f1-f0)/10; //chirp for 10 seconds
 
   float out = sinf(2*pi*(f0*chirp.t+(k/2)*chirp.t*chirp.t));
-  out = 1500 + (500*out);
+  int16_t servo_out = 100*out*10;
 
   chirp.t += dt;
-  return ((int16_t)((float)(out+0.5)));
+
+  return (servo_out);
 }
