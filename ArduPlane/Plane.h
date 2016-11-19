@@ -1136,6 +1136,13 @@ private:
     bool avoid_adsb_init(bool ignore_checks);
     void avoid_adsb_run();
 
+    // custom chirp command for sys id
+    struct{
+        uint64_t last_run_us;
+	float t;
+    }chirp;
+    int16_t control_chirp(void);
+
 public:
     void mavlink_delay_cb();
     void failsafe_check(void);

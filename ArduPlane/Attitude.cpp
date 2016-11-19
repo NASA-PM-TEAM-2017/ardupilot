@@ -1,4 +1,7 @@
 #include "Plane.h"
+#include <AP_HAL/AP_HAL.h>
+
+extern const AP_HAL::HAL& hal;
 
 /*
   get a speed scaling number for control surfaces. This is applied to
@@ -268,7 +271,13 @@ void Plane::stabilize_yaw(float speed_scaler)
 void Plane::stabilize_training(float speed_scaler)
 {
     if (training_manual_roll) {
+      if (hal.rcin->read(7-1) >= 1700) {
+	  // the user has enabled chirp control test code
+	channel_roll->set_servo_out(control_chirp());
+	}
+      else{
         channel_roll->set_servo_out(channel_roll->get_control_in());
+      }
     } else {
         // calculate what is needed to hold
         stabilize_roll(speed_scaler);
@@ -701,4 +710,31 @@ void Plane::update_load_factor(void)
         nav_roll_cd = constrain_int32(nav_roll_cd, -roll_limit, roll_limit);
         roll_limit_cd = constrain_int32(roll_limit_cd, -roll_limit, roll_limit);
     }    
+}
+
+
+int16_t Plane::control_chirp(void)
+{
+  float dt;
+  uint64_t now = AP_HAL::micros64();
+
+   if (chirp.last_run_us == 0 || now - chirp.last_run_us > 200000UL) {
+        // reset after not running for 0.2s
+    chirp.t = 0;
+    chirp.last_run_us = now;
+    return 0;
+    }
+  
+  dt = (now - chirp.last_run_us) * 1.0e-6f;
+
+  float f0 = 0.1;
+  float f1 = 0.5;
+  float pi = 3.14159;
+  float k = (f1-f0)/10; //chirp for 10 seconds
+
+  float out = sinf(2*pi*(f0*chirp.t+(k/2)*chirp.t*chirp.t));
+  out = 1500 + (500*out);
+
+  chirp.t += dt;
+  return ((int16_t)((float)(out+0.5)));
 }
