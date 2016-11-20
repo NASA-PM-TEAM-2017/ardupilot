@@ -291,7 +291,7 @@ void Plane::stabilize_training(float speed_scaler)
     if (training_manual_pitch) {
         if (hal.rcin->read(6-1) >= 1700) {
 	  // the user has enabled chirp control test code
-	channel_pitch->set_servo_out(control_chirp(25));
+	channel_pitch->set_servo_out(control_chirp(50));
 	}
       else{
         channel_pitch->set_servo_out(channel_pitch->get_control_in());
@@ -735,7 +735,7 @@ int16_t Plane::control_chirp(float max_command)
    chirp.last_run_us = now;
 
   float f0 = 0.01;
-  float f1 = 0.5;
+  float f1 = 5;
   float pi = 3.14159;
   float k = (f1-f0)/5; //chirp for 10 seconds
 
