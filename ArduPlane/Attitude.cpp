@@ -735,11 +735,11 @@ int16_t Plane::control_chirp(float max_command)
    chirp.last_run_us = now;
 
   float f0 = 0.01;
-  float f1 = 5;
+  float f1 = 10;
   float pi = 3.14159;
-  float k = (f1-f0)/5; //chirp for 10 seconds
+  float k = (f1-f0)/7; //chirp for 5 seconds
 
-  float out = sinf(2*pi*(f0*chirp.t+(k/2)*chirp.t*chirp.t));
+  float out = sinf(2*pi*(f0*(7-chirp.t)+(k/2)*(7-chirp.t)*(7-chirp.t)));
   int16_t servo_out = max_command*out*10;
 
   chirp.t += dt;
