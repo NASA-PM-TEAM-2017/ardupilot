@@ -6,6 +6,7 @@
 #include "AP_AutoTune.h"
 #include <DataFlash/DataFlash.h>
 #include <AP_Math/AP_Math.h>
+#include <Filter/LowPassFilter2p.h>
 
 class AP_PitchController {
 public:
@@ -87,6 +88,8 @@ private:
         float sigma_dot;
         float f;
         float f_dot;
+
+	LowPassFilter2pFloat filter;
 
     } adap;
 

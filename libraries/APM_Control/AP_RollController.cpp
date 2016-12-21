@@ -84,10 +84,10 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
 
 	// adaptive control parameters
 	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_RollController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 4.5),
-	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 1),
-        AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 1),
-        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 1),
+	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 5),
+	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 0.1),
+        AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 0.1),
+        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 0.1),
 	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_upper_limit, 0.65),
 	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_lower_limit, 0.1),
         AP_GROUPINFO("OMEGAU", 16, AP_RollController, adap.omega_upper_limit, 0.65),
@@ -95,7 +95,7 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
         AP_GROUPINFO("SIGMAU", 18, AP_RollController, adap.sigma_upper_limit, 1),
 	AP_GROUPINFO("SIGMAL", 19, AP_RollController, adap.sigma_lower_limit, -1),
 	AP_GROUPINFO("DBAND", 20, AP_RollController, adap.deadband, 0),
-        AP_GROUPINFO("W0",21, AP_RollController, adap.w0, 200),
+        AP_GROUPINFO("W0",21, AP_RollController, adap.w0, 50),
     
 	AP_GROUPEND
 };
@@ -273,6 +273,8 @@ float AP_RollController::adaptive_control(float r)
         adap.omega = 0.0;
         adap.sigma = 0.0;
         adap.last_run_us = now;
+	float cutoff_hz = adap.w0/(2*M_PI); //convert cutoff freq from rad/s to hz
+	adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),cutoff_hz);
         return 0;
     }    
 
@@ -281,7 +283,12 @@ float AP_RollController::adaptive_control(float r)
 
     
     // State Predictor
-    adap.x_m += dt*(-adap.alpha*adap.x_m + adap.alpha*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma));       
+    float alpha_filt = exp(-adap.alpha*dt); //alpha in rad/s 
+    alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);
+    float beta_filt = 1-alpha_filt;  
+
+    adap.x_m = alpha_filt*adap.x_m + beta_filt*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma); 
+      
     float x_error = adap.x_m-x;
     // Constrain error to +-300 deg/s
     x_error = constrain_float(x_error,-radians(300), radians(300));
@@ -321,9 +328,7 @@ float AP_RollController::adaptive_control(float r)
     adap.u += dt*(eta);
 
     //  lowpass u (command signal out)
-    float alpha_filt = (dt * adap.w0 / (1 + dt * adap.w0)); //local variable for quick discrete calculation of lowpass time constant
-    alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);          
-    adap.u_lowpass = (1 - alpha_filt)*adap.u_lowpass+ alpha_filt*(adap.u);
+    adap.u_lowpass = adap.filter.apply(adap.u);
 
 
     DataFlash_Class::instance()->Log_Write("ADAR", "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qffffffffff",
