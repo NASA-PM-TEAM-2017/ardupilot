@@ -101,15 +101,15 @@ AP_GROUPINFO("TCONST", 0, AP_PitchController, gains.tau, 0.5f),
 	// adaptive control parameters
 	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_PitchController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
 	AP_GROUPINFO("ALPHA", 10, AP_PitchController, adap.alpha, 5),
-	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 0.1),
-        AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 0.1),
-        AP_GROUPINFO("GAMMAS", 13, AP_PitchController, adap.gamma_sigma, 0.1),
-	AP_GROUPINFO("THETAU", 14, AP_PitchController, adap.theta_upper_limit, 0.45),
-	AP_GROUPINFO("THETAL", 15, AP_PitchController, adap.theta_lower_limit, 0.1),
-        AP_GROUPINFO("OMEGAU", 16, AP_PitchController, adap.omega_upper_limit, 0.65),
-	AP_GROUPINFO("OMEGAL", 17, AP_PitchController, adap.omega_lower_limit, 0.1),
-        AP_GROUPINFO("SIGMAU", 18, AP_PitchController, adap.sigma_upper_limit, 1),
-	AP_GROUPINFO("SIGMAL", 19, AP_PitchController, adap.sigma_lower_limit, -1),
+	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 20.0),
+        AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 20.0),
+        AP_GROUPINFO("GAMMAS", 13, AP_PitchController, adap.gamma_sigma, 20.0),
+	AP_GROUPINFO("THETAU", 14, AP_PitchController, adap.theta_max, 5),
+	AP_GROUPINFO("THETAL", 15, AP_PitchController, adap.theta_epsilon, 3),
+        AP_GROUPINFO("OMEGAU", 16, AP_PitchController, adap.omega_max, 5),
+	AP_GROUPINFO("OMEGAL", 17, AP_PitchController, adap.omega_epsilon, 3),
+        AP_GROUPINFO("SIGMAU", 18, AP_PitchController, adap.sigma_max, 5),
+	AP_GROUPINFO("SIGMAL", 19, AP_PitchController, adap.sigma_epsilon, 3),
 	AP_GROUPINFO("DBAND", 20, AP_PitchController, adap.deadband, 0),
         AP_GROUPINFO("W0",21, AP_PitchController, adap.w0, 50),
     
@@ -387,12 +387,16 @@ float AP_PitchController::adaptive_control(float r)
         adap.x_m = x;       
         adap.u = 0.0;
         adap.u_lowpass = 0.0;
-        adap.theta = 0.2;
-        adap.omega = 0.0;
+        adap.theta = 0.5;
+        adap.omega = 16.5;
         adap.sigma = 0.0;
+	adap.theta_th = 0.0;
+	adap.omega_th = 0.0;
+	adap.sigma_th = 0.0;
         adap.last_run_us = now;
 	float cutoff_hz = adap.w0/(2*M_PI); //convert cutoff freq from rad/s to hz
 	adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),cutoff_hz);
+	adap.filter.reset();
         return 0;
     }    
 
@@ -412,18 +416,26 @@ float AP_PitchController::adaptive_control(float r)
     x_error = constrain_float(x_error,-radians(300), radians(300));
 
     // Constrain adaptive gain based on loop rate
-    adap.gamma_theta = constrain_float(adap.gamma_theta,0,(0.0247/dt));
-    adap.gamma_omega = constrain_float(adap.gamma_omega,0,(0.0247/dt));
-    adap.gamma_sigma = constrain_float(adap.gamma_sigma,0,(0.0247/dt));
+    //adap.gamma_theta = constrain_float(adap.gamma_theta,0,(0.0247/dt));
+    //adap.gamma_omega = constrain_float(adap.gamma_omega,0,(0.0247/dt));
+    //adap.gamma_sigma = constrain_float(adap.gamma_sigma,0,(0.0247/dt));
 
-    float theta_dot = -adap.gamma_theta*x*x_error;
-    float omega_dot = -adap.gamma_omega*adap.u_lowpass*x_error;
-    float sigma_dot = -adap.gamma_sigma*x_error;
+    // Calculate solution to Lyapunov 1x1 matrix
+    float Pb = 1/(2*adap.alpha);
 
-    //Projection Operator
-    theta_dot = projection_operator(adap.theta, theta_dot, adap.theta_upper_limit, adap.theta_lower_limit,2);
-    omega_dot = projection_operator(adap.omega, omega_dot, adap.omega_upper_limit, adap.omega_lower_limit,2);
-    sigma_dot = projection_operator(adap.sigma, sigma_dot, adap.sigma_upper_limit, adap.sigma_lower_limit,2);
+    // Projection Operator
+    adap.theta_proj = projection_operator(adap.theta_th,-x_error*Pb*x,adap.theta_epsilon,adap.theta_max);
+    adap.omega_proj = projection_operator(adap.omega_th,-x_error*Pb*adap.u_lowpass,adap.omega_epsilon,adap.omega_max);
+    adap.sigma_proj = projection_operator(adap.sigma_th,-x_error*Pb,adap.sigma_epsilon,adap.sigma_max);
+
+    // Integrate projection output
+    adap.theta_th += dt*adap.theta_proj;
+    adap.omega_th += dt*adap.omega_proj;
+    adap.sigma_th += dt*adap.sigma_proj;
+			
+    float theta_dot = adap.gamma_theta*adap.theta_proj;
+    float omega_dot = adap.gamma_omega*adap.omega_proj;
+    float sigma_dot = adap.gamma_sigma*adap.sigma_proj;
 
     // for ADAP_TUNING message
     adap.theta_dot = theta_dot;
@@ -436,9 +448,9 @@ float AP_PitchController::adaptive_control(float r)
     adap.omega += dt*(omega_dot);
     adap.sigma += dt*(sigma_dot);
 
-    adap.theta = constrain_float(adap.theta, adap.theta_lower_limit, adap.theta_upper_limit);
-    adap.omega = constrain_float(adap.omega, adap.omega_lower_limit, adap.omega_upper_limit);
-    adap.sigma = constrain_float(adap.sigma, adap.sigma_lower_limit, adap.sigma_upper_limit);
+    //adap.theta = constrain_float(adap.theta, adap.theta_lower_limit, adap.theta_upper_limit);
+    //adap.omega = constrain_float(adap.omega, adap.omega_lower_limit, adap.omega_upper_limit);
+    //adap.sigma = constrain_float(adap.sigma, adap.sigma_lower_limit, adap.sigma_upper_limit);
      
     // u (controller output to plant)
     float eta = adap.r - adap.theta*x - adap.omega*adap.u_lowpass - adap.sigma;
@@ -446,6 +458,7 @@ float AP_PitchController::adaptive_control(float r)
     adap.u += dt*(eta);
 
     //  lowpass u (command signal out)
+    adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),adap.w0/(2*M_PI));
     adap.u_lowpass = adap.filter.apply(adap.u);
 
 
@@ -472,27 +485,22 @@ float AP_PitchController::adaptive_control(float r)
      return degrees(constrain_float(adap.u_lowpass,radians(-45), radians(45)))*100;
 }
 
-float AP_PitchController::projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta)
+float AP_PitchController::projection_operator(float theta, float y, float epsilon, float theta_max)
 {
-  
-    float y_inflection = 3.1562;
-    float b = (upper_limit+lower_limit)/2;
-    float a = (y_inflection+delta)/sq(upper_limit-b);
-    float f = a*sq(value-b)-delta;
-    float f_dot = 2*a*(value-b);
+	float theta_max2 = theta_max*theta_max;
+	
+	// Calculate convex function
+	float f_theta = (theta*theta)-theta_max2/(epsilon*theta_max2);
+	float f_theta_dot = (2*theta)/(epsilon*theta_max2);	
 
-    if (f >= 0){
-        if ((f_dot*value_dot) >= 0){
-            value_dot -= (f*value_dot);
-        }
-    }
+	float projection_out = y;
 
-    // for ADAP_TUNING message
-    adap.f = f;
-    adap.f_dot = f_dot;
+	if (-f_theta <= 0 && -f_theta_dot*y < 0)
+	{
+		projection_out = y-(y*f_theta);
+	}	
  
-    return value_dot;
-
+   	return projection_out;
 }
 
 /*
@@ -509,9 +517,9 @@ void AP_PitchController::adaptive_tuning_send(mavlink_channel_t chan)
                                      adap.theta,
                                      adap.omega,
                                      adap.sigma,
-                                     adap.theta_dot,
-                                     adap.omega_dot,
-                                     adap.sigma_dot,
+                                     adap.theta_th,
+                                     adap.omega_th,
+                                     adap.sigma_th,
                                      adap.f,
                                      adap.f_dot,
                                      adap.u);

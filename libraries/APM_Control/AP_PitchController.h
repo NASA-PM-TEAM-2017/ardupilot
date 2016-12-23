@@ -62,12 +62,12 @@ private:
         AP_Float gamma_theta;
         AP_Float gamma_omega;
         AP_Float gamma_sigma;
-        AP_Float theta_upper_limit;
-        AP_Float theta_lower_limit;
-        AP_Float omega_upper_limit;
-        AP_Float omega_lower_limit;
-        AP_Float sigma_upper_limit;
-        AP_Float sigma_lower_limit;
+        AP_Float theta_max;
+        AP_Float theta_epsilon;
+        AP_Float omega_max;
+        AP_Float omega_epsilon;
+        AP_Float sigma_max;
+        AP_Float sigma_epsilon;
         AP_Float deadband;
         AP_Float w0;
 
@@ -83,6 +83,12 @@ private:
         float u;
         float u_lowpass;
         float x_m;
+	float theta_proj;
+	float omega_proj;
+	float sigma_proj;
+	float theta_th;
+	float omega_th;
+	float sigma_th;
         float theta_dot;
         float omega_dot;
         float sigma_dot;
@@ -94,5 +100,5 @@ private:
     } adap;
 
     float adaptive_control(float r);
-    float projection_operator(float value, float value_dot, float upper_limit, float lower_limit, float delta);
+    float projection_operator(float theta, float y, float epsilon, float theta_max);
 };
