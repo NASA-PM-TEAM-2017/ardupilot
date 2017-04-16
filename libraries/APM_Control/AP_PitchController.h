@@ -63,13 +63,16 @@ private:
         AP_Float gamma_omega;
         AP_Float gamma_sigma;
         AP_Float theta_max;
+	AP_Float theta_min;
         AP_Float theta_epsilon;
         AP_Float omega_max;
+	AP_Float omega_min;
         AP_Float omega_epsilon;
         AP_Float sigma_max;
+	AP_Float sigma_min;
         AP_Float sigma_epsilon;
-        AP_Float deadband;
         AP_Float w0;
+        AP_Float k;
 
         uint64_t last_run_us;
 	float r;
@@ -100,5 +103,5 @@ private:
     } adap;
 
     float adaptive_control(float r);
-    float projection_operator(float theta, float y, float epsilon, float theta_max);
+    float projection_operator(float theta, float y, float epsilon, float theta_max, float theta_min);
 };
