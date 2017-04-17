@@ -106,14 +106,14 @@ AP_GROUPINFO("TCONST", 0, AP_PitchController, gains.tau, 0.5f),
         AP_GROUPINFO("GAMMAS", 13, AP_PitchController, adap.gamma_sigma, 10000),
 	AP_GROUPINFO("THETAU", 14, AP_PitchController, adap.theta_max, 5.0),
 	AP_GROUPINFO("THETAL", 15, AP_PitchController, adap.theta_min, 0.4),
-	AP_GROUPINFO("THETAE", 16, AP_PitchController, adap.theta_epsilon, 4100),
+	AP_GROUPINFO("THETAE", 16, AP_PitchController, adap.theta_epsilon, 5925),
         AP_GROUPINFO("OMEGAU", 17, AP_PitchController, adap.omega_max, 5.0),
-	AP_GROUPINFO("OMEGAL", 18, AP_PitchController, adap.omega_min, 0.1),
-	AP_GROUPINFO("OMEGAE", 19, AP_PitchController, adap.omega_epsilon, 4095),
-        AP_GROUPINFO("SIGMAU", 20, AP_PitchController, adap.sigma_max, 0.1),
-	AP_GROUPINFO("SIGMAL", 21, AP_PitchController, adap.sigma_min, -0.1),
-	AP_GROUPINFO("SIGMAE", 22, AP_PitchController, adap.sigma_epsilon, 138),
-	AP_GROUPINFO("W0", 23, AP_PitchController, adap.w0, 50),
+	AP_GROUPINFO("OMEGAL", 18, AP_PitchController, adap.omega_min, 0.03),
+	AP_GROUPINFO("OMEGAE", 19, AP_PitchController, adap.omega_epsilon, 5925),
+        AP_GROUPINFO("SIGMAU", 20, AP_PitchController, adap.sigma_max, 0.01),
+	AP_GROUPINFO("SIGMAL", 21, AP_PitchController, adap.sigma_min, -0.01),
+	AP_GROUPINFO("SIGMAE", 22, AP_PitchController, adap.sigma_epsilon, 203),
+	AP_GROUPINFO("W0", 23, AP_PitchController, adap.w0, 25),
         AP_GROUPINFO("K",24, AP_PitchController, adap.k, 0.1),
     
 	AP_GROUPEND
@@ -394,7 +394,6 @@ float AP_PitchController::adaptive_control(float r)
         adap.theta = 1.0;
         adap.omega = 1.0;
         adap.sigma = 0.0;
-
         adap.last_run_us = now;
 	float cutoff_hz = adap.w0/(2*M_PI); //convert cutoff freq from rad/s to hz
 	adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),cutoff_hz);
@@ -407,7 +406,7 @@ float AP_PitchController::adaptive_control(float r)
 
     
     // State Predictor (first order single pole recursive filter)
-    float alpha_filt = exp(-adap.alpha*dt); //alpha in rad/s or tau in seconds   
+    float alpha_filt = exp(-adap.alpha*dt); //alpha in rad/s 
     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);
     float beta_filt = 1-alpha_filt;  
 
@@ -437,8 +436,7 @@ float AP_PitchController::adaptive_control(float r)
     // u (controller output to plant)
     float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - adap.r;
     eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
-    adap.u -= dt*(eta)*adap.k; // C(s)= wk/(s+wk) -> k sets the first order low pass response
-    
+    adap.u -= dt*(eta)*adap.k; // C(s)= wk/(s+wk) -> k sets the first order low pass response   
 
     // Additional cascaded second order low pass filter (strictly propper
     adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),adap.w0/(2*M_PI));
@@ -507,11 +505,11 @@ void AP_PitchController::adaptive_tuning_send(mavlink_channel_t chan)
                                      adap.theta,
                                      adap.omega,
                                      adap.sigma,
-                                     adap.theta_th,
-                                     adap.omega_th,
-                                     adap.sigma_th,
-                                     adap.f,
-                                     adap.f_dot,
+                                     adap.theta_dot,
+                                     adap.omega_dot,
+                                     adap.sigma_dot,
+                                     adap.x_m,	
+                                     adap.u_lowpass,
                                      adap.u);
     }
 }

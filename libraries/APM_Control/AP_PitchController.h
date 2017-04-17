@@ -86,12 +86,6 @@ private:
         float u;
         float u_lowpass;
         float x_m;
-	float theta_proj;
-	float omega_proj;
-	float sigma_proj;
-	float theta_th;
-	float omega_th;
-	float sigma_th;
         float theta_dot;
         float omega_dot;
         float sigma_dot;

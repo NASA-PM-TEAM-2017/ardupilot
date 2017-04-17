@@ -67,13 +67,16 @@ private:
         AP_Float gamma_omega;
         AP_Float gamma_sigma;
         AP_Float theta_max;
+	AP_Float theta_min;
         AP_Float theta_epsilon;
         AP_Float omega_max;
+	AP_Float omega_min;
         AP_Float omega_epsilon;
         AP_Float sigma_max;
+	AP_Float sigma_min;
         AP_Float sigma_epsilon;
-        AP_Float deadband;
         AP_Float w0;
+        AP_Float k;
 
         uint64_t last_run_us;
 	float r;
@@ -87,12 +90,6 @@ private:
         float u;
         float u_lowpass;
         float x_m;
-	float theta_proj;
-	float omega_proj;
-	float sigma_proj;
-	float theta_th;
-	float omega_th;
-	float sigma_th;
         float theta_dot;
         float omega_dot;
         float sigma_dot;
@@ -100,9 +97,9 @@ private:
         float f_dot;
 
 	LowPassFilter2pFloat filter;
+
     } adap;
 
-    // return desired roll command from -1 to 1 given roll error in radians
-    float adaptive_control(float roll_error);
-    float projection_operator(float theta, float y, float epsilon, float theta_max);
+    float adaptive_control(float r);
+    float projection_operator(float theta, float y, float epsilon, float theta_max, float theta_min);
 };
