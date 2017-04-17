@@ -306,10 +306,13 @@ float AP_RollController::adaptive_control(float r)
     float omega_dot = projection_operator(adap.omega,-adap.gamma_omega*x_error*Pb*adap.u_lowpass,adap.omega_epsilon,adap.omega_max,adap.omega_min);
     float sigma_dot = projection_operator(adap.sigma,-adap.gamma_sigma*x_error*Pb,adap.sigma_epsilon,adap.sigma_max,adap.sigma_min);
 			    
-    // Parameter Update                  
+    // Parameter Update using Trapezoidal integration              
     adap.theta += dt*(theta_dot);
+    adap.theta += (dt/2)*(theta_dot+adap.theta);
     adap.omega += dt*(omega_dot);
+    adap.omega += (dt/2)*(omega_dot+adap.omega);
     adap.sigma += dt*(sigma_dot);
+    adap.sigma += (dt/2)*(sigma_dot+adap.sigma);
 
     adap.theta = constrain_float(adap.theta, adap.theta_min, adap.theta_max);
     adap.omega = constrain_float(adap.omega, adap.omega_min, adap.omega_max);
@@ -319,6 +322,7 @@ float AP_RollController::adaptive_control(float r)
     float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - adap.r;
     eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
     adap.u -= dt*(eta)*adap.k; // C(s)= wk/(s+wk) -> k sets the first order low pass response
+    adap.u -= (dt/2)*(eta*adap.k+adap.u);  //Trapezoidal Integration
     
     // Additional cascaded second order low pass filter (strictly propper
     adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),adap.w0/(2*M_PI));
