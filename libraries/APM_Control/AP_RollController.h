@@ -77,6 +77,7 @@ private:
         AP_Float sigma_epsilon;
         AP_Float w0;
         AP_Float k;
+	AP_Float kg;
 
         uint64_t last_run_us;
 	float r;

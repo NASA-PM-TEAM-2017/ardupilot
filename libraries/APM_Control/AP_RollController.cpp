@@ -88,17 +88,18 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
 	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 10000),
         AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 10000),
         AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 10000),
-	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_max, 5.0),
-	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_min, 0.4),
+	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_max, 1.0),
+	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_min, 0.01),
 	AP_GROUPINFO("THETAE", 16, AP_RollController, adap.theta_epsilon, 5925),
-        AP_GROUPINFO("OMEGAU", 17, AP_RollController, adap.omega_max, 5.0),
-	AP_GROUPINFO("OMEGAL", 18, AP_RollController, adap.omega_min, 0.03),
+        AP_GROUPINFO("OMEGAU", 17, AP_RollController, adap.omega_max, 0.01),
+	AP_GROUPINFO("OMEGAL", 18, AP_RollController, adap.omega_min, 0.0001),
 	AP_GROUPINFO("OMEGAE", 19, AP_RollController, adap.omega_epsilon, 5925),
         AP_GROUPINFO("SIGMAU", 20, AP_RollController, adap.sigma_max, 0.01),
 	AP_GROUPINFO("SIGMAL", 21, AP_RollController, adap.sigma_min, -0.01),
 	AP_GROUPINFO("SIGMAE", 22, AP_RollController, adap.sigma_epsilon, 203),
-	AP_GROUPINFO("W0", 23, AP_RollController, adap.w0, 25),
+	AP_GROUPINFO("W0", 23, AP_RollController, adap.w0, 18),
         AP_GROUPINFO("K",24, AP_RollController, adap.k, 0.3),
+	AP_GROUPINFO("KG",25, AP_RollController, adap.kg, 1.0),
     
 	AP_GROUPEND
 };
@@ -319,7 +320,7 @@ float AP_RollController::adaptive_control(float r)
     adap.sigma = constrain_float(adap.sigma, adap.sigma_min, adap.sigma_max);
      
     // u (controller output to plant)
-    float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - adap.r;
+    float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - (adap.kg*adap.r);
     eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
     adap.u -= dt*(eta)*adap.k; // C(s)= wk/(s+wk) -> k sets the first order low pass response
     adap.u -= (dt/2)*(eta*adap.k+adap.u);  //Trapezoidal Integration

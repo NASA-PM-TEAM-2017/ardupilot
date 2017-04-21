@@ -104,17 +104,18 @@ AP_GROUPINFO("TCONST", 0, AP_PitchController, gains.tau, 0.5f),
 	AP_GROUPINFO("GAMMAT", 11, AP_PitchController, adap.gamma_theta, 10000),
         AP_GROUPINFO("GAMMAW", 12, AP_PitchController, adap.gamma_omega, 10000),
         AP_GROUPINFO("GAMMAS", 13, AP_PitchController, adap.gamma_sigma, 10000),
-	AP_GROUPINFO("THETAU", 14, AP_PitchController, adap.theta_max, 5.0),
-	AP_GROUPINFO("THETAL", 15, AP_PitchController, adap.theta_min, 0.4),
+	AP_GROUPINFO("THETAU", 14, AP_PitchController, adap.theta_max, 1.0),
+	AP_GROUPINFO("THETAL", 15, AP_PitchController, adap.theta_min, 0.01),
 	AP_GROUPINFO("THETAE", 16, AP_PitchController, adap.theta_epsilon, 5925),
-        AP_GROUPINFO("OMEGAU", 17, AP_PitchController, adap.omega_max, 5.0),
-	AP_GROUPINFO("OMEGAL", 18, AP_PitchController, adap.omega_min, 0.03),
+        AP_GROUPINFO("OMEGAU", 17, AP_PitchController, adap.omega_max, 0.01),
+	AP_GROUPINFO("OMEGAL", 18, AP_PitchController, adap.omega_min, 0.0001),
 	AP_GROUPINFO("OMEGAE", 19, AP_PitchController, adap.omega_epsilon, 5925),
         AP_GROUPINFO("SIGMAU", 20, AP_PitchController, adap.sigma_max, 0.01),
 	AP_GROUPINFO("SIGMAL", 21, AP_PitchController, adap.sigma_min, -0.01),
 	AP_GROUPINFO("SIGMAE", 22, AP_PitchController, adap.sigma_epsilon, 203),
-	AP_GROUPINFO("W0", 23, AP_PitchController, adap.w0, 25),
+	AP_GROUPINFO("W0", 23, AP_PitchController, adap.w0, 18),
         AP_GROUPINFO("K",24, AP_PitchController, adap.k, 0.1),
+	AP_GROUPINFO("KG",25, AP_PitchController, adap.kg, 1.0),
     
 	AP_GROUPEND
 };
@@ -437,7 +438,7 @@ float AP_PitchController::adaptive_control(float r)
     adap.sigma = constrain_float(adap.sigma, adap.sigma_min, adap.sigma_max);
      
     // u (controller output to plant)
-    float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - adap.r;
+    float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - (adap.kg*adap.r);
     eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
     adap.u -= dt*(eta)*adap.k; // C(s)= wk/(s+wk) -> k sets the first order low pass response
     adap.u -= (dt/2)*(eta*adap.k+adap.u);  //Trapezoidal Integration   
