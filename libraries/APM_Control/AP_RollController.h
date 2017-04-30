@@ -84,12 +84,14 @@ private:
         float x;
         float x_error;
         float eta;
+	float integrator;
         float theta;
         float omega;
         float sigma;
         float alpha_filt;
         float u;
         float u_lowpass;
+	float u_sp;
         float x_m;
         float theta_dot;
         float omega_dot;

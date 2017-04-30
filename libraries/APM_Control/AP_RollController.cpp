@@ -84,20 +84,20 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
 
 	// adaptive control parameters
 	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_RollController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 5),
-	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 10000),
-        AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 10000),
-        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 10000),
-	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_max, 1.0),
-	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_min, 0.01),
+	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 24),
+	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 1000),
+        AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 1000),
+        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 1000),
+	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_max, 2.0),
+	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_min, 0.5),
 	AP_GROUPINFO("THETAE", 16, AP_RollController, adap.theta_epsilon, 5925),
-        AP_GROUPINFO("OMEGAU", 17, AP_RollController, adap.omega_max, 0.01),
-	AP_GROUPINFO("OMEGAL", 18, AP_RollController, adap.omega_min, 0.0001),
+        AP_GROUPINFO("OMEGAU", 17, AP_RollController, adap.omega_max, 2.0),
+	AP_GROUPINFO("OMEGAL", 18, AP_RollController, adap.omega_min, 0.5),
 	AP_GROUPINFO("OMEGAE", 19, AP_RollController, adap.omega_epsilon, 5925),
-        AP_GROUPINFO("SIGMAU", 20, AP_RollController, adap.sigma_max, 0.01),
-	AP_GROUPINFO("SIGMAL", 21, AP_RollController, adap.sigma_min, -0.01),
+        AP_GROUPINFO("SIGMAU", 20, AP_RollController, adap.sigma_max, 0.1),
+	AP_GROUPINFO("SIGMAL", 21, AP_RollController, adap.sigma_min, -0.1),
 	AP_GROUPINFO("SIGMAE", 22, AP_RollController, adap.sigma_epsilon, 203),
-	AP_GROUPINFO("W0", 23, AP_RollController, adap.w0, 18),
+	AP_GROUPINFO("W0", 23, AP_RollController, adap.w0, 25),
         AP_GROUPINFO("K",24, AP_RollController, adap.k, 0.3),
 	AP_GROUPINFO("KG",25, AP_RollController, adap.kg, 1.0),
     
@@ -252,15 +252,19 @@ float AP_RollController::adaptive_control(float r)
     // x = actual state value from sensor (i.e. pitch rate from gyro)
     // x_m = estimated model output (i.e. estimated pitch rate given state predictor estimates)
     // u = commanded output (i.e. delta elevator) (radians)
+    // u_sp = command to state predictor (radians)
     // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
     // theta = estimated state from state predictor (unitless)
     // omega = estimated state from state predictor (unitless)
     // sigma = estimated state from state predictor (unitless)
-    // theta_upper_limit = constraint on states to ensure robustness (unitless)
-    // theta_lower_limit = constraint on states to ensure robustness (unitless)
-    // omega_upper_limit = constraint on states to ensure robustness (unitless)
-    // omega_lower_limit = constraint on states to ensure robustness (unitless)
+    // theta_max = constraint on states to ensure robustness (unitless)
+    // theta_min = constraint on states to ensure robustness (unitless)
+    // omega_max = constraint on states to ensure robustness (unitless)
+    // omega_min = constraint on states to ensure robustness (unitless)
+    // sigma_max = constraint on states to ensure robustness (unitless)
+    // sigma_min = constraint on states to ensure robustness (unitless)
     // epsilon = slope of projection operator (needs to be commensurate with gain and function)
+    // integrator = 1/S standard discrete integrator
 
     float dt;
  
@@ -274,9 +278,11 @@ float AP_RollController::adaptive_control(float r)
         adap.x_m = x;       
         adap.u = 0.0;
         adap.u_lowpass = 0.0;
+	adap.u_sp = 0.0;
         adap.theta = 1.0;
         adap.omega = 1.0;
         adap.sigma = 0.0;
+	adap.integrator = 0.0;
         adap.last_run_us = now;
 	float cutoff_hz = adap.w0/(2*M_PI); //convert cutoff freq from rad/s to hz
 	adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),cutoff_hz);
@@ -288,12 +294,24 @@ float AP_RollController::adaptive_control(float r)
     adap.last_run_us = now;
 
     
+    // u (controller output to plant)
+    adap.eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma;
+    adap.u_sp = adap.eta;
+    float out = constrain_float(adap.eta-(adap.kg*adap.r),-radians(90)/dt, radians(90)/dt);
+    //kD(s)
+    adap.integrator += dt*(out);  
+    adap.u = constrain_float(-adap.k*adap.integrator,-radians(45),radians(45)); // C(s)= wk/(s+wk) -> k sets the first order low pass response
+
+    // Additional cascaded second order low pass filter (strictly propper)
+    adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),adap.w0/(2*M_PI));
+    adap.u_lowpass = adap.filter.apply(adap.u); 
+    
     // State Predictor (first order single pole recursive filter)
     float alpha_filt = exp(-adap.alpha*dt); //alpha in rad/s 
     alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);
     float beta_filt = 1-alpha_filt;  
 
-    adap.x_m = alpha_filt*adap.x_m + beta_filt*(adap.omega*adap.u_lowpass + adap.theta*x + adap.sigma);
+    adap.x_m = alpha_filt*adap.x_m + beta_filt*(adap.u_sp);
        
     float x_error = adap.x_m-x;
     // Constrain error to +-300 deg/s
@@ -307,27 +325,15 @@ float AP_RollController::adaptive_control(float r)
     float omega_dot = projection_operator(adap.omega,-adap.gamma_omega*x_error*Pb*adap.u_lowpass,adap.omega_epsilon,adap.omega_max,adap.omega_min);
     float sigma_dot = projection_operator(adap.sigma,-adap.gamma_sigma*x_error*Pb,adap.sigma_epsilon,adap.sigma_max,adap.sigma_min);
 			    
-    // Parameter Update using Trapezoidal integration              
+    // Parameter Update using Trapezoidal integration                 
     adap.theta += dt*(theta_dot);
-    adap.theta += (dt/2)*(theta_dot+adap.theta);
     adap.omega += dt*(omega_dot);
-    adap.omega += (dt/2)*(omega_dot+adap.omega);
     adap.sigma += dt*(sigma_dot);
-    adap.sigma += (dt/2)*(sigma_dot+adap.sigma);
 
     adap.theta = constrain_float(adap.theta, adap.theta_min, adap.theta_max);
     adap.omega = constrain_float(adap.omega, adap.omega_min, adap.omega_max);
     adap.sigma = constrain_float(adap.sigma, adap.sigma_min, adap.sigma_max);
      
-    // u (controller output to plant)
-    float eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma - (adap.kg*adap.r);
-    eta = constrain_float(eta,-radians(90)/dt, radians(90)/dt);
-    adap.u -= dt*(eta)*adap.k; // C(s)= wk/(s+wk) -> k sets the first order low pass response
-    adap.u -= (dt/2)*(eta*adap.k+adap.u);  //Trapezoidal Integration
-    
-    // Additional cascaded second order low pass filter (strictly propper
-    adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),adap.w0/(2*M_PI));
-    adap.u_lowpass = adap.filter.apply(adap.u);
 
     // for ADAP_TUNING message
     adap.theta_dot = theta_dot;
@@ -341,7 +347,7 @@ float AP_RollController::adaptive_control(float r)
                                            adap.theta, 
                                            adap.omega,
                                            adap.sigma,
-                                           eta,
+                                           adap.eta,
                                            degrees(adap.x_m),
                                            degrees(x),
                                            degrees(r),
