@@ -271,13 +271,12 @@ void Plane::stabilize_yaw(float speed_scaler)
 void Plane::stabilize_training(float speed_scaler)
 {
     if (training_manual_roll) {
-      if (hal.rcin->read(7-1) >= 1700) {
-	  // the user has enabled chirp control test code
-	channel_roll->set_servo_out(control_chirp(50));
-	}
-      else{
-        channel_roll->set_servo_out(channel_roll->get_control_in());
-      }
+        if (hal.rcin->read(7-1) >= 1700) {
+            // the user has enabled chirp control test code
+            SRV_Channels::set_output_scaled(SRV_Channel::k_aileron, control_chirp(50));
+        } else {
+            SRV_Channels::set_output_scaled(SRV_Channel::k_aileron, channel_roll->get_control_in());
+        }
     } else {
         // calculate what is needed to hold
         stabilize_roll(speed_scaler);
@@ -290,12 +289,11 @@ void Plane::stabilize_training(float speed_scaler)
 
     if (training_manual_pitch) {
         if (hal.rcin->read(6-1) >= 1700) {
-	  // the user has enabled chirp control test code
-	channel_pitch->set_servo_out(control_chirp(50));
-	}
-      else{
-        channel_pitch->set_servo_out(channel_pitch->get_control_in());
-      }
+            // the user has enabled chirp control test code
+            SRV_Channels::set_output_scaled(SRV_Channel::k_elevator, control_chirp(50));
+        } else {
+            SRV_Channels::set_output_scaled(SRV_Channel::k_elevator, channel_pitch->get_control_in());
+        }
     } else {
         stabilize_pitch(speed_scaler);
         if ((nav_pitch_cd > 0 && channel_pitch->get_control_in() < channel_pitch->get_servo_out()) ||
