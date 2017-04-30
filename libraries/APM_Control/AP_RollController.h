@@ -6,7 +6,7 @@
 #include "AP_AutoTune.h"
 #include <DataFlash/DataFlash.h>
 #include <AP_Math/AP_Math.h>
-#include <Filter/LowPassFilter2p.h>
+#include <ADAP_Control/ADAP_Control.h>
 
 class AP_RollController {
 public:
@@ -57,52 +57,5 @@ private:
 
 	AP_AHRS &_ahrs;
 
-    /*
-      adaptive control test code. Maths from Ryan Beall
-    */
-    struct {
-        AP_Int8  enable_chan;
-        AP_Float alpha;
-        AP_Float gamma_theta;
-        AP_Float gamma_omega;
-        AP_Float gamma_sigma;
-        AP_Float theta_max;
-	AP_Float theta_min;
-        AP_Float theta_epsilon;
-        AP_Float omega_max;
-	AP_Float omega_min;
-        AP_Float omega_epsilon;
-        AP_Float sigma_max;
-	AP_Float sigma_min;
-        AP_Float sigma_epsilon;
-        AP_Float w0;
-        AP_Float k;
-	AP_Float kg;
-
-        uint64_t last_run_us;
-	float r;
-        float x;
-        float x_error;
-        float eta;
-	float integrator;
-        float theta;
-        float omega;
-        float sigma;
-        float alpha_filt;
-        float u;
-        float u_lowpass;
-	float u_sp;
-        float x_m;
-        float theta_dot;
-        float omega_dot;
-        float sigma_dot;
-        float f;
-        float f_dot;
-
-	LowPassFilter2pFloat filter;
-
-    } adap;
-
-    float adaptive_control(float r);
-    float projection_operator(float theta, float y, float epsilon, float theta_max, float theta_min);
+    ADAP_Control adap_control{"ADAR"};    
 };

@@ -82,24 +82,9 @@ const AP_Param::GroupInfo AP_RollController::var_info[] = {
 	// @User: User
 	AP_GROUPINFO("FF",        6, AP_RollController, gains.FF,          0.0f),
 
-	// adaptive control parameters
-	AP_GROUPINFO_FLAGS("AD_CH", 9, AP_RollController, adap.enable_chan, 0, AP_PARAM_FLAG_ENABLE),
-	AP_GROUPINFO("ALPHA", 10, AP_RollController, adap.alpha, 24),
-	AP_GROUPINFO("GAMMAT", 11, AP_RollController, adap.gamma_theta, 1000),
-        AP_GROUPINFO("GAMMAW", 12, AP_RollController, adap.gamma_omega, 1000),
-        AP_GROUPINFO("GAMMAS", 13, AP_RollController, adap.gamma_sigma, 1000),
-	AP_GROUPINFO("THETAU", 14, AP_RollController, adap.theta_max, 2.0),
-	AP_GROUPINFO("THETAL", 15, AP_RollController, adap.theta_min, 0.5),
-	AP_GROUPINFO("THETAE", 16, AP_RollController, adap.theta_epsilon, 5925),
-        AP_GROUPINFO("OMEGAU", 17, AP_RollController, adap.omega_max, 2.0),
-	AP_GROUPINFO("OMEGAL", 18, AP_RollController, adap.omega_min, 0.5),
-	AP_GROUPINFO("OMEGAE", 19, AP_RollController, adap.omega_epsilon, 5925),
-        AP_GROUPINFO("SIGMAU", 20, AP_RollController, adap.sigma_max, 0.1),
-	AP_GROUPINFO("SIGMAL", 21, AP_RollController, adap.sigma_min, -0.1),
-	AP_GROUPINFO("SIGMAE", 22, AP_RollController, adap.sigma_epsilon, 203),
-	AP_GROUPINFO("W0", 23, AP_RollController, adap.w0, 25),
-        AP_GROUPINFO("K",24, AP_RollController, adap.k, 0.3),
-	AP_GROUPINFO("KG",25, AP_RollController, adap.kg, 1.0),
+    // @Group: _A_
+    // @Path: ../libraries/ADAP_Control/ADAP_Control.cpp
+    AP_SUBGROUPINFO(adap_control, "A_", 7, AP_RollController, ADAP_Control),
     
 	AP_GROUPEND
 };
@@ -141,6 +126,10 @@ int32_t AP_RollController::_get_rate_out(float desired_rate, float scaler, bool 
     // Get body rate vector (radians/sec)
 	float omega_x = _ahrs.get_gyro().x;
 	
+    if (adap_control.enabled()) {
+        return adap_control.update(_ahrs.get_ins().get_sample_rate(), radians(desired_rate), omega_x) * 4500;
+    }
+
 	// Calculate the roll rate error (deg/sec) and apply gain scaler
     float achieved_rate = ToDeg(omega_x);
 	float rate_error = (desired_rate - achieved_rate) * scaler;
@@ -242,6 +231,13 @@ void AP_RollController::reset_I()
 	_pid_info.I = 0;
 }
 
+/*
+  send ADAP_TUNING message
+*/
+void AP_RollController::adaptive_tuning_send(mavlink_channel_t chan)
+{
+    adap_control.adaptive_tuning_send(chan, PID_TUNING_PITCH);
+}
 
 /*
   adaptive control test code. Maths thanks to Ryan Beall
