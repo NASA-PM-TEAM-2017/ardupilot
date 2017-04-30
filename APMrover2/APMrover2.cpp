@@ -51,6 +51,7 @@ const AP_Scheduler::Task Rover::scheduler_tasks[] = {
     SCHED_TASK(update_GPS_50Hz,        50,   2500),
     SCHED_TASK(update_GPS_10Hz,        10,   2500),
     SCHED_TASK(update_alt,             10,   3400),
+    SCHED_TASK(update_beacon,          50,     50),
     SCHED_TASK(navigate,               10,   1600),
     SCHED_TASK(update_compass,         10,   2000),
     SCHED_TASK(update_commands,        10,   1000),
@@ -71,11 +72,15 @@ const AP_Scheduler::Task Rover::scheduler_tasks[] = {
     SCHED_TASK(compass_accumulate,     50,    900),
     SCHED_TASK(update_notify,          50,    300),
     SCHED_TASK(one_second_loop,         1,   3000),
-    SCHED_TASK(compass_cal_update,     50,    100), 
+    SCHED_TASK(compass_cal_update,     50,    100),
     SCHED_TASK(accel_cal_update,       10,    100),
     SCHED_TASK(dataflash_periodic,     50,    300),
-    SCHED_TASK(button_update,          5,     100),
-    SCHED_TASK(stats_update,           1,     100),
+    SCHED_TASK(button_update,           5,    100),
+    SCHED_TASK(stats_update,            1,    100),
+    SCHED_TASK(crash_check,            10,   1000),
+#if ADVANCED_FAILSAFE == ENABLED
+    SCHED_TASK(afs_fs_check,           10,    100),
+#endif
 };
 
 /*
@@ -90,17 +95,15 @@ void Rover::stats_update(void)
 /*
   setup is called when the sketch starts
  */
-void Rover::setup() 
+void Rover::setup()
 {
     cliSerial = hal.console;
 
     // load the default values of variables listed in var_info[]
     AP_Param::setup_sketch_defaults();
 
-    notify.init(false);
+    in_auto_reverse = false;
 
-    AP_Notify::flags.failsafe_battery = false;
-    
     rssi.init();
 
     init_ardupilot();
@@ -117,14 +120,15 @@ void Rover::loop()
     // wait for an INS sample
     ins.wait_for_sample();
 
-    uint32_t timer = AP_HAL::micros();
+    const uint32_t timer = AP_HAL::micros();
 
     delta_us_fast_loop  = timer - fast_loopTimer_us;
     G_Dt                = delta_us_fast_loop * 1.0e-6f;
     fast_loopTimer_us   = timer;
 
-    if (delta_us_fast_loop > G_Dt_max)
+    if (delta_us_fast_loop > G_Dt_max) {
         G_Dt_max = delta_us_fast_loop;
+    }
 
     mainLoop_count++;
 
@@ -143,11 +147,17 @@ void Rover::loop()
     scheduler.run(remaining);
 }
 
+void Rover::update_soft_armed()
+{
+    hal.util->set_soft_armed(arming.is_armed() &&
+                             hal.util->safety_switch_state() != AP_HAL::Util::SAFETY_DISARMED);
+    DataFlash.set_vehicle_armed(hal.util->get_soft_armed());
+}
+
 // update AHRS system
 void Rover::ahrs_update()
 {
-    hal.util->set_soft_armed(arming.is_armed() &&
-                   hal.util->safety_switch_state() != AP_HAL::Util::SAFETY_DISARMED);
+    update_soft_armed();
 
 #if HIL_MODE != HIL_MODE_DISABLED
     // update hil before AHRS update
@@ -168,8 +178,9 @@ void Rover::ahrs_update()
         ground_speed = norm(velocity.x, velocity.y);
     }
 
-    if (should_log(MASK_LOG_ATTITUDE_FAST))
+    if (should_log(MASK_LOG_ATTITUDE_FAST)) {
         Log_Write_Attitude();
+    }
 
     if (should_log(MASK_LOG_IMU)) {
         DataFlash.Log_Write_IMU(ins);
@@ -198,7 +209,7 @@ void Rover::update_trigger(void)
         if (should_log(MASK_LOG_CAMERA)) {
             DataFlash.Log_Write_Camera(ahrs, gps, current_loc);
         }
-    } 
+    }
 #endif
 }
 
@@ -252,14 +263,18 @@ void Rover::update_compass(void)
  */
 void Rover::update_logging1(void)
 {
-    if (should_log(MASK_LOG_ATTITUDE_MED) && !should_log(MASK_LOG_ATTITUDE_FAST))
+    if (should_log(MASK_LOG_ATTITUDE_MED) && !should_log(MASK_LOG_ATTITUDE_FAST)) {
         Log_Write_Attitude();
+    }
 
-    if (should_log(MASK_LOG_CTUN))
+    if (should_log(MASK_LOG_CTUN)) {
         Log_Write_Control_Tuning();
+        Log_Write_Beacon();
+    }
 
-    if (should_log(MASK_LOG_NTUN))
+    if (should_log(MASK_LOG_NTUN)) {
         Log_Write_Nav_Tuning();
+    }
 }
 
 /*
@@ -273,8 +288,9 @@ void Rover::update_logging2(void)
         }
     }
 
-    if (should_log(MASK_LOG_RC))
+    if (should_log(MASK_LOG_RC)) {
         Log_Write_RC();
+    }
 
     if (should_log(MASK_LOG_IMU)) {
         DataFlash.Log_Write_Vibration(ins);
@@ -287,7 +303,7 @@ void Rover::update_logging2(void)
  */
 void Rover::update_aux(void)
 {
-    RC_Channel_aux::enable_aux_servos();
+    SRV_Channels::enable_aux_servos();
 }
 
 /*
@@ -295,8 +311,9 @@ void Rover::update_aux(void)
  */
 void Rover::one_second_loop(void)
 {
-    if (should_log(MASK_LOG_CURRENT))
+    if (should_log(MASK_LOG_CURRENT)) {
         Log_Write_Current();
+    }
     // send a heartbeat
     gcs_send_message(MSG_HEARTBEAT);
 
@@ -323,10 +340,11 @@ void Rover::one_second_loop(void)
     // write perf data every 20s
     if (counter % 10 == 0) {
         if (scheduler.debug() != 0) {
-            hal.console->printf("G_Dt_max=%lu\n", (unsigned long)G_Dt_max);
+            hal.console->printf("G_Dt_max=%u\n", G_Dt_max);
         }
-        if (should_log(MASK_LOG_PM))
+        if (should_log(MASK_LOG_PM)) {
             Log_Write_Performance();
+        }
         G_Dt_max = 0;
         resetPerfData();
     }
@@ -340,7 +358,7 @@ void Rover::one_second_loop(void)
     }
 
     ins.set_raw_logging(should_log(MASK_LOG_IMU_RAW));
-    
+
     // update error mask of sensors and subsystems. The mask uses the
     // MAV_SYS_STATUS_* values from mavlink. If a bit is set then it
     // indicates that the sensor or subsystem is present but not
@@ -358,7 +376,7 @@ void Rover::update_GPS_50Hz(void)
     static uint32_t last_gps_reading[GPS_MAX_INSTANCES];
     gps.update();
 
-    for (uint8_t i=0; i<gps.num_sensors(); i++) {
+    for (uint8_t i=0; i < gps.num_sensors(); i++) {
         if (gps.last_message_time_ms(i) != last_gps_reading[i]) {
             last_gps_reading[i] = gps.last_message_time_ms(i);
             if (should_log(MASK_LOG_GPS)) {
@@ -376,7 +394,7 @@ void Rover::update_GPS_10Hz(void)
     if (gps.last_message_time_ms() != last_gps_msg_ms && gps.status() >= AP_GPS::GPS_OK_FIX_3D) {
         last_gps_msg_ms = gps.last_message_time_ms();
 
-        if (ground_start_count > 1){
+        if (ground_start_count > 1) {
             ground_start_count--;
 
         } else if (ground_start_count == 1) {
@@ -389,10 +407,10 @@ void Rover::update_GPS_10Hz(void)
                 init_home();
 
                 // set system clock for log timestamps
-                uint64_t gps_timestamp = gps.time_epoch_usec();
-                
+                const uint64_t gps_timestamp = gps.time_epoch_usec();
+
                 hal.util->set_system_clock(gps_timestamp);
-                
+
                 // update signing timestamp
                 GCS_MAVLINK::update_signing_timestamp(gps_timestamp);
 
@@ -420,16 +438,26 @@ void Rover::update_GPS_10Hz(void)
 
 void Rover::update_current_mode(void)
 {
-    switch (control_mode){
+    switch (control_mode) {
     case AUTO:
     case RTL:
-        calc_lateral_acceleration();
-        calc_nav_steer();
-        calc_throttle(g.speed_cruise);
+        if (!in_auto_reverse) {
+            set_reverse(false);
+        }
+        if (!do_auto_rotation) {
+            calc_lateral_acceleration();
+            calc_nav_steer();
+            calc_throttle(g.speed_cruise);
+        } else {
+            do_yaw_rotation();
+        }
         break;
 
     case GUIDED: {
-        switch (guided_mode){
+        if (!in_auto_reverse) {
+            set_reverse(false);
+        }
+        switch (guided_mode) {
         case Guided_Angle:
             nav_set_yaw_speed();
             break;
@@ -437,16 +465,18 @@ void Rover::update_current_mode(void)
         case Guided_WP:
             if (rtl_complete || verify_RTL()) {
                 // we have reached destination so stop where we are
-                if (channel_throttle->get_servo_out() != g.throttle_min.get()) {
+                if (SRV_Channels::get_output_scaled(SRV_Channel::k_throttle) != g.throttle_min.get()) {
                     gcs_send_mission_item_reached_message(0);
                 }
-                channel_throttle->set_servo_out(g.throttle_min.get());
-                channel_steer->set_servo_out(0);
+                SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, g.throttle_min.get());
+                SRV_Channels::set_output_scaled(SRV_Channel::k_steering, 0);
                 lateral_acceleration = 0;
             } else {
                 calc_lateral_acceleration();
                 calc_nav_steer();
                 calc_throttle(g.speed_cruise);
+                Log_Write_GuidedTarget(guided_mode, Vector3f(guided_WP.lat, guided_WP.lng, guided_WP.alt),
+                                       Vector3f(g.speed_cruise, SRV_Channels::get_output_scaled(SRV_Channel::k_throttle), 0));
             }
             break;
 
@@ -470,12 +500,12 @@ void Rover::update_current_mode(void)
         // constrain to user set TURN_MAX_G
         max_g_force = constrain_float(max_g_force, 0.1f, g.turn_max_g * GRAVITY_MSS);
 
-        lateral_acceleration = max_g_force * (channel_steer->pwm_to_angle()/4500.0f);
+        lateral_acceleration = max_g_force * (channel_steer->get_control_in()/4500.0f);
         calc_nav_steer();
 
         // and throttle gives speed in proportion to cruise speed, up
         // to 50% throttle, then uses nudging above that.
-        float target_speed = channel_throttle->pwm_to_angle() * 0.01f * 2 * g.speed_cruise;
+        float target_speed = channel_throttle->get_control_in() * 0.01f * 2 * g.speed_cruise;
         set_reverse(target_speed < 0);
         if (in_reverse) {
             target_speed = constrain_float(target_speed, -g.speed_cruise, 0);
@@ -494,18 +524,21 @@ void Rover::update_current_mode(void)
           we set the exact value in set_servos(), but it helps for
           logging
          */
-        channel_throttle->set_servo_out(channel_throttle->get_control_in());
-        channel_steer->set_servo_out(channel_steer->pwm_to_angle());
+        SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, channel_throttle->get_control_in());
+        SRV_Channels::set_output_scaled(SRV_Channel::k_steering, channel_steer->get_control_in());
 
         // mark us as in_reverse when using a negative throttle to
         // stop AHRS getting off
-        set_reverse(channel_throttle->get_servo_out() < 0);
+        set_reverse(SRV_Channels::get_output_scaled(SRV_Channel::k_throttle) < 0);
         break;
 
     case HOLD:
         // hold position - stop motors and center steering
-        channel_throttle->set_servo_out(0);
-        channel_steer->set_servo_out(0);
+        SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, 0);
+        SRV_Channels::set_output_scaled(SRV_Channel::k_steering, 0);
+        if (!in_auto_reverse) {
+            set_reverse(false);
+        }
         break;
 
     case INITIALISING:
@@ -525,6 +558,9 @@ void Rover::update_navigation()
 
     case AUTO:
         mission.update();
+        if (do_auto_rotation) {
+            do_yaw_rotation();
+        }
         break;
 
     case RTL:
@@ -532,13 +568,13 @@ void Rover::update_navigation()
         calc_lateral_acceleration();
         calc_nav_steer();
         if (verify_RTL()) {
-            channel_throttle->set_servo_out(g.throttle_min.get());
+            SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, g.throttle_min.get());
             set_mode(HOLD);
         }
         break;
 
     case GUIDED:
-        switch (guided_mode){
+        switch (guided_mode) {
         case Guided_Angle:
             nav_set_yaw_speed();
             break;
@@ -549,8 +585,8 @@ void Rover::update_navigation()
             calc_nav_steer();
             if (rtl_complete || verify_RTL()) {
                 // we have reached destination so stop where we are
-                channel_throttle->set_servo_out(g.throttle_min.get());
-                channel_steer->set_servo_out(0);
+                SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, g.throttle_min.get());
+                SRV_Channels::set_output_scaled(SRV_Channel::k_steering, 0);
                 lateral_acceleration = 0;
             }
             break;

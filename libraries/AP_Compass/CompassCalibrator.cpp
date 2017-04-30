@@ -67,14 +67,6 @@ extern const AP_HAL::HAL& hal;
 ///////////////////// PUBLIC INTERFACE /////////////////////
 ////////////////////////////////////////////////////////////
 
-#ifdef AP_ARMING_COMPASS_OFFSETS_MAX
-#define COMPASS_CALIBRATOR_OFS_MAX AP_ARMING_COMPASS_OFFSETS_MAX
-#elif CONFIG_HAL_BOARD == HAL_BOARD_SITL
-#define COMPASS_CALIBRATOR_OFS_MAX 2000
-#else
-#define COMPASS_CALIBRATOR_OFS_MAX 1000
-#endif
-
 CompassCalibrator::CompassCalibrator():
 _tolerance(COMPASS_CAL_DEFAULT_TOLERANCE),
 _sample_buffer(nullptr)
@@ -86,10 +78,11 @@ void CompassCalibrator::clear() {
     set_status(COMPASS_CAL_NOT_STARTED);
 }
 
-void CompassCalibrator::start(bool retry, float delay) {
+void CompassCalibrator::start(bool retry, float delay, uint16_t offset_max) {
     if(running()) {
         return;
     }
+    _offset_max = offset_max;
     _attempt = 1;
     _retry = retry;
     _delay_start_sec = delay;
@@ -347,9 +340,9 @@ bool CompassCalibrator::set_status(compass_cal_status_t status) {
 bool CompassCalibrator::fit_acceptable() {
     if( !isnan(_fitness) &&
         _params.radius > 150 && _params.radius < 950 && //Earth's magnetic field strength range: 250-850mG
-        fabsf(_params.offset.x) < COMPASS_CALIBRATOR_OFS_MAX &&
-        fabsf(_params.offset.y) < COMPASS_CALIBRATOR_OFS_MAX &&
-        fabsf(_params.offset.z) < COMPASS_CALIBRATOR_OFS_MAX &&
+        fabsf(_params.offset.x) < _offset_max &&
+        fabsf(_params.offset.y) < _offset_max &&
+        fabsf(_params.offset.z) < _offset_max &&
         _params.diag.x > 0.2f && _params.diag.x < 5.0f &&
         _params.diag.y > 0.2f && _params.diag.y < 5.0f &&
         _params.diag.z > 0.2f && _params.diag.z < 5.0f &&
@@ -371,7 +364,7 @@ void CompassCalibrator::thin_samples() {
     // shuffle the samples http://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle
     // this is so that adjacent samples don't get sequentially eliminated
     for(uint16_t i=_samples_collected-1; i>=1; i--) {
-        uint16_t j = get_random() % (i+1);
+        uint16_t j = get_random16() % (i+1);
         CompassSample temp = _sample_buffer[i];
         _sample_buffer[i] = _sample_buffer[j];
         _sample_buffer[j] = temp;
@@ -685,15 +678,6 @@ void CompassCalibrator::run_ellipsoid_fit()
     }
 }
 
-
-uint16_t CompassCalibrator::get_random(void)
-{
-    static uint32_t m_z = 1234;
-    static uint32_t m_w = 76542;
-    m_z = 36969 * (m_z & 65535) + (m_z >> 16);
-    m_w = 18000 * (m_w & 65535) + (m_w >> 16);
-    return ((m_z << 16) + m_w) & 0xFFFF;
-}
 
 //////////////////////////////////////////////////////////
 //////////// CompassSample public interface //////////////

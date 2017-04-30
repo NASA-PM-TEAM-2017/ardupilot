@@ -17,7 +17,6 @@ MODULES		+= drivers/stm32/adc
 MODULES		+= drivers/stm32/tone_alarm
 MODULES		+= drivers/led
 MODULES		+= drivers/px4fmu
-MODULES		+= drivers/rgbled
 MODULES		+= drivers/hmc5883
 MODULES		+= drivers/ms5611
 MODULES		+= drivers/mb12xx
@@ -30,7 +29,6 @@ MODULES		+= drivers/trone
 #MODULES	+= modules/sensors
 MODULES		+= drivers/mkblctrl
 MODULES		+= drivers/batt_smbus
-MODULES		+= drivers/irlock
 MODULES		+= drivers/pwm_input
 MODULES		+= drivers/px4flow
 

@@ -34,8 +34,12 @@ extern const AP_HAL::HAL& hal;
 uint32_t GCS_MAVLINK::last_radio_status_remrssi_ms;
 uint8_t GCS_MAVLINK::mavlink_active = 0;
 uint8_t GCS_MAVLINK::chan_is_streaming = 0;
-ObjectArray<GCS_MAVLINK::statustext_t> GCS_MAVLINK::_statustext_queue(GCS_MAVLINK_PAYLOAD_STATUS_CAPACITY);
 uint32_t GCS_MAVLINK::reserve_param_space_start_ms;
+
+AP_HAL::Util::perf_counter_t GCS_MAVLINK::_perf_packet;
+AP_HAL::Util::perf_counter_t GCS_MAVLINK::_perf_update;
+
+GCS *GCS::_singleton = nullptr;
 
 GCS_MAVLINK::GCS_MAVLINK()
 {
@@ -56,6 +60,13 @@ GCS_MAVLINK::init(AP_HAL::UARTDriver *port, mavlink_channel_t mav_chan)
     initialised = true;
     _queued_parameter = nullptr;
     reset_cli_timeout();
+
+    if (!_perf_packet) {
+        _perf_packet = hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, "GCS_Packet");
+    }
+    if (!_perf_update) {
+        _perf_update = hal.util->perf_alloc(AP_HAL::Util::PC_ELAPSED, "GCS_Update");
+    }
 }
 
 
@@ -208,7 +219,8 @@ GCS_MAVLINK::queued_waypoint_send()
             chan,
             waypoint_dest_sysid,
             waypoint_dest_compid,
-            waypoint_request_i);
+            waypoint_request_i,
+            MAV_MISSION_TYPE_MISSION);
     }
 }
 
@@ -230,6 +242,36 @@ void GCS_MAVLINK::send_power_status(void)
                                   hal.analogin->board_voltage() * 1000,
                                   hal.analogin->servorail_voltage() * 1000,
                                   hal.analogin->power_status_flags());
+}
+
+void GCS_MAVLINK::send_battery_status(const AP_BattMonitor &battery, const uint8_t instance) const
+{
+    // catch the battery backend not supporting the required number of cells
+    static_assert(sizeof(AP_BattMonitor::cells) >= (sizeof(uint16_t) * MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN),
+                  "Not enough battery cells for the MAVLink message");
+
+    float temp;
+    bool got_temperature = battery.get_temperature(temp, instance);
+    mavlink_msg_battery_status_send(chan,
+                                    instance, // id
+                                    MAV_BATTERY_FUNCTION_UNKNOWN, // function
+                                    MAV_BATTERY_TYPE_UNKNOWN, // type
+                                    got_temperature ? ((int16_t) (temp * 100)) : INT16_MAX, // temperature. INT16_MAX if unknown
+                                    battery.get_cell_voltages(instance).cells, // cell voltages
+                                    battery.has_current(instance) ? battery.current_amps(instance) * 100 : -1, // current
+                                    battery.has_current(instance) ? battery.current_total_mah(instance) : -1, // total current
+                                    -1, // joules used
+                                    battery.capacity_remaining_pct(instance));
+}
+
+// returns true if all battery instances were reported
+bool GCS_MAVLINK::send_battery_status(const AP_BattMonitor &battery) const
+{
+    for(uint8_t i = 0; i < battery.num_instances(); i++) {
+        CHECK_PAYLOAD_SIZE(BATTERY_STATUS);
+        send_battery_status(battery, i);
+    }
+    return true;
 }
 
 // report AHRS2 state
@@ -274,7 +316,8 @@ void GCS_MAVLINK::handle_mission_request_list(AP_Mission &mission, mavlink_messa
     mavlink_msg_mission_request_list_decode(msg, &packet);
 
     // reply with number of commands in the mission.  The GCS will then request each command separately
-    mavlink_msg_mission_count_send(chan,msg->sysid, msg->compid, mission.num_commands());
+    mavlink_msg_mission_count_send(chan,msg->sysid, msg->compid, mission.num_commands(),
+                                   MAV_MISSION_TYPE_MISSION);
 
     // set variables to help handle the expected sending of commands to the GCS
     waypoint_receiving = false;             // record that we are sending commands (i.e. not receiving)
@@ -336,6 +379,14 @@ void GCS_MAVLINK::handle_mission_request(AP_Mission &mission, mavlink_message_t 
         mavlink_mission_request_t packet;
         mavlink_msg_mission_request_decode(msg, &packet);
 
+        if (packet.seq != 0 && // always allow HOME to be read
+            packet.seq >= mission.num_commands()) {
+            // try to educate the GCS on the actual size of the mission:
+            mavlink_msg_mission_count_send(chan,msg->sysid, msg->compid, mission.num_commands(),
+                                           MAV_MISSION_TYPE_MISSION);
+            goto mission_item_send_failed;
+        }
+
         // retrieve mission from eeprom
         if (!mission.read_cmd_from_storage(packet.seq, cmd)) {
             goto mission_item_send_failed;
@@ -379,7 +430,8 @@ void GCS_MAVLINK::handle_mission_request(AP_Mission &mission, mavlink_message_t 
 
 mission_item_send_failed:
     // send failure message
-    mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_MISSION_ERROR);
+    mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_MISSION_ERROR,
+                                 MAV_MISSION_TYPE_MISSION);
 }
 
 /*
@@ -409,7 +461,8 @@ void GCS_MAVLINK::handle_mission_count(AP_Mission &mission, mavlink_message_t *m
     // start waypoint receiving
     if (packet.count > mission.num_commands_max()) {
         // send NAK
-        mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_MISSION_NO_SPACE);
+        mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_MISSION_NO_SPACE,
+                                     MAV_MISSION_TYPE_MISSION);
         return;
     }
 
@@ -436,10 +489,12 @@ void GCS_MAVLINK::handle_mission_clear_all(AP_Mission &mission, mavlink_message_
     // clear all waypoints
     if (mission.clear()) {
         // send ack
-        mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_RESULT_ACCEPTED);
+        mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_RESULT_ACCEPTED,
+                                     MAV_MISSION_TYPE_MISSION);
     }else{
         // send nack
-        mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_MISSION_ERROR);
+        mavlink_msg_mission_ack_send(chan, msg->sysid, msg->compid, MAV_MISSION_ERROR,
+                                     MAV_MISSION_TYPE_MISSION);
     }
 }
 
@@ -754,7 +809,6 @@ void GCS_MAVLINK::handle_radio_status(mavlink_message_t *msg, DataFlash_Class &d
     }
 }
 
-
 /*
   handle an incoming mission item
   return true if this is the last mission item, otherwise false
@@ -865,7 +919,8 @@ bool GCS_MAVLINK::handle_mission_item(mavlink_message_t *msg, AP_Mission &missio
             chan,
             msg->sysid,
             msg->compid,
-            MAV_MISSION_ACCEPTED);
+            MAV_MISSION_ACCEPTED,
+            MAV_MISSION_TYPE_MISSION);
         
         send_text(MAV_SEVERITY_INFO,"Flight plan received");
         waypoint_receiving = false;
@@ -890,7 +945,8 @@ mission_ack:
         chan,
         msg->sysid,
         msg->compid,
-        result);
+        result,
+        MAV_MISSION_TYPE_MISSION);
 
     return mission_is_complete;
 }
@@ -990,11 +1046,15 @@ void GCS_MAVLINK::packetReceived(const mavlink_status_t &status,
 }
 
 void
-GCS_MAVLINK::update(run_cli_fn run_cli)
+GCS_MAVLINK::update(run_cli_fn run_cli, uint32_t max_time_us)
 {
     // receive new packets
     mavlink_message_t msg;
     mavlink_status_t status;
+    uint32_t tstart_us = AP_HAL::micros();
+
+    hal.util->perf_begin(_perf_update);
+
     status.packet_rx_drop_count = 0;
 
     // process received bytes
@@ -1019,13 +1079,26 @@ GCS_MAVLINK::update(run_cli_fn run_cli)
             }
         }
 
+        bool parsed_packet = false;
+        
         // Try to get a new message
         if (mavlink_parse_char(chan, c, &msg, &status)) {
+            hal.util->perf_begin(_perf_packet);
             packetReceived(status, msg);
+            hal.util->perf_end(_perf_packet);
+            parsed_packet = true;
+        }
+
+        if (parsed_packet || i % 100 == 0) {
+            // make sure we don't spend too much time parsing mavlink messages
+            if (AP_HAL::micros() - tstart_us > max_time_us) {
+                break;
+            }
         }
     }
 
     if (!waypoint_receiving) {
+        hal.util->perf_end(_perf_update);    
         return;
     }
 
@@ -1041,6 +1114,7 @@ GCS_MAVLINK::update(run_cli_fn run_cli)
         send_message(MSG_NEXT_WAYPOINT);
     }
 
+    hal.util->perf_end(_perf_update);    
 }
 
 
@@ -1320,7 +1394,7 @@ void GCS_MAVLINK::send_statustext_all(MAV_SEVERITY severity, const char *fmt, ..
     hal.util->vsnprintf((char *)text, sizeof(text)-1, fmt, arg_list);
     va_end(arg_list);
     text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN] = 0;
-    send_statustext(severity, mavlink_active | chan_is_streaming, text);
+    gcs().send_statustext(severity, mavlink_active | chan_is_streaming, text);
 }
 
 /*
@@ -1333,14 +1407,14 @@ void GCS_MAVLINK::send_statustext_chan(MAV_SEVERITY severity, uint8_t dest_chan,
     va_start(arg_list, fmt);
     hal.util->vsnprintf((char *)text, sizeof(text), fmt, arg_list);
     va_end(arg_list);
-    send_statustext(severity, (1<<dest_chan), text);
+    gcs().send_statustext(severity, (1<<dest_chan), text);
 }
 
 
 /*
     send a statustext text string to specific MAVLink bitmask
 */
-void GCS_MAVLINK::send_statustext(MAV_SEVERITY severity, uint8_t dest_bitmask, const char *text)
+void GCS::send_statustext(MAV_SEVERITY severity, uint8_t dest_bitmask, const char *text)
 {
     if (dataflash_p != nullptr) {
         dataflash_p->Log_Write_Message(text);
@@ -1353,7 +1427,7 @@ void GCS_MAVLINK::send_statustext(MAV_SEVERITY severity, uint8_t dest_bitmask, c
 
     // filter destination ports to only allow active ports.
     statustext_t statustext{};
-    statustext.bitmask = (mavlink_active | chan_is_streaming) & dest_bitmask;
+    statustext.bitmask = (GCS_MAVLINK::active_channel_mask()  | GCS_MAVLINK::streaming_channel_mask() ) & dest_bitmask;
     if (!statustext.bitmask) {
         // nowhere to send
         return;
@@ -1370,17 +1444,18 @@ void GCS_MAVLINK::send_statustext(MAV_SEVERITY severity, uint8_t dest_bitmask, c
     // try and send immediately if possible
     service_statustext();
 }
+
 /*
     send a statustext message to specific MAVLink connections in a bitmask
  */
-void GCS_MAVLINK::service_statustext(void)
+void GCS::service_statustext(void)
 {
     // create bitmask of what mavlink ports we should send this text to.
     // note, if sending to all ports, we only need to store the bitmask for each and the string only once.
     // once we send over a link, clear the port but other busy ports bit may stay allowing for faster links
     // to clear the bit and send quickly but slower links to still store the string. Regardless of mixed
-    // bitrates of ports, a maximum of GCS_MAVLINK_PAYLOAD_STATUS_CAPACITY strings can be buffered. Downside
-    // is if you have a super slow link mixed with a faster port, if there are GCS_MAVLINK_PAYLOAD_STATUS_CAPACITY
+    // bitrates of ports, a maximum of _status_capacity strings can be buffered. Downside
+    // is if you have a super slow link mixed with a faster port, if there are _status_capacity
     // strings in the slow queue then the next item can not be queued for the faster link
 
     if (_statustext_queue.empty()) {
@@ -1388,7 +1463,7 @@ void GCS_MAVLINK::service_statustext(void)
         return;
     }
 
-    for (uint8_t idx=0; idx<GCS_MAVLINK_PAYLOAD_STATUS_CAPACITY; ) {
+    for (uint8_t idx=0; idx<_status_capacity; ) {
         statustext_t *statustext = _statustext_queue[idx];
         if (statustext == nullptr) {
             break;
@@ -1507,7 +1582,8 @@ void GCS_MAVLINK::send_opticalflow(AP_AHRS_NavEKF &ahrs, const OpticalFlow &optf
     float hagl = 0;
 
     if (ahrs.have_inertial_nav()) {
-        ahrs.get_NavEKF().getHAGL(hagl);
+
+        ahrs.get_hagl(hagl);
     }
 
     // populate and send message
@@ -1520,7 +1596,9 @@ void GCS_MAVLINK::send_opticalflow(AP_AHRS_NavEKF &ahrs, const OpticalFlow &optf
         bodyRate.x,
         bodyRate.y,
         optflow.quality(),
-        hagl); // ground distance (in meters) set to zero
+        hagl,  // ground distance (in meters) set to zero
+        flowRate.x,
+        flowRate.y);
 }
 #endif
 
@@ -1586,7 +1664,7 @@ void GCS_MAVLINK::send_autopilot_version(uint8_t major_version, uint8_t minor_ve
 void GCS_MAVLINK::send_local_position(const AP_AHRS &ahrs) const
 {
     Vector3f local_position, velocity;
-    if (!ahrs.get_relative_position_NED(local_position) ||
+    if (!ahrs.get_relative_position_NED_home(local_position) ||
         !ahrs.get_velocity_NED(velocity)) {
         // we don't know the position and velocity
         return;
@@ -1604,7 +1682,7 @@ void GCS_MAVLINK::send_local_position(const AP_AHRS &ahrs) const
 }
 
 /*
-  send LOCAL_POSITION_NED message
+  send VIBRATION message
  */
 void GCS_MAVLINK::send_vibration(const AP_InertialSensor &ins) const
 {
@@ -1707,7 +1785,7 @@ void GCS_MAVLINK::send_servo_output_raw(bool hil)
     uint16_t values[16] {};
     if (hil) {
         for (uint8_t i=0; i<16; i++) {
-            values[i] = RC_Channel::rc_channel(i)->get_radio_out();
+            values[i] = SRV_Channels::srv_channel(i)->get_output_pwm();
         }
     } else {
         hal.rcout->read(values, 16);
@@ -1819,6 +1897,35 @@ uint8_t GCS_MAVLINK::handle_rc_bind(const mavlink_command_long_t &packet)
 }
 
 /*
+  return a timesync request
+  Sends back ts1 as received, and tc1 is the local timestamp in usec
+ */
+void GCS_MAVLINK::handle_timesync(mavlink_message_t *msg)
+{
+    // decode incoming timesync message
+    mavlink_timesync_t tsync;
+    mavlink_msg_timesync_decode(msg, &tsync);
+
+    // ignore messages in which tc1 field (timestamp 1) has already been filled in
+    if (tsync.tc1 != 0) {
+        return;
+    }
+
+    // create new timesync struct with tc1 field as system time in nanoseconds
+    mavlink_timesync_t rsync;
+    rsync.tc1 = AP_HAL::micros64() * 1000;
+    rsync.ts1 = tsync.ts1;
+
+    // respond with a timesync message
+    mavlink_msg_timesync_send(
+        chan,
+        rsync.tc1,
+        rsync.ts1
+        );
+}
+
+
+/*
   handle messages which don't require vehicle specific data
  */
 void GCS_MAVLINK::handle_common_message(mavlink_message_t *msg)
@@ -1836,5 +1943,13 @@ void GCS_MAVLINK::handle_common_message(mavlink_message_t *msg)
     case MAVLINK_MSG_ID_DEVICE_OP_WRITE:
         handle_device_op_write(msg);
         break;
+    case MAVLINK_MSG_ID_TIMESYNC:
+        handle_timesync(msg);
+        break;
     }
+}
+
+GCS &gcs()
+{
+    return *GCS::instance();
 }

@@ -52,7 +52,7 @@ public:
     virtual void ListAvailableLogs(AP_HAL::BetterStream *port) = 0;
 
     void EnableWrites(bool enable) { _writes_enabled = enable; }
-    bool logging_started(void) const { return log_write_started; }
+    virtual bool logging_started(void) const { return log_write_started; }
 
     virtual void Init() {
         _writes_enabled = true;
@@ -120,6 +120,8 @@ public:
     // these methods are used when reporting system status over mavlink
     virtual bool logging_enabled() const = 0;
     virtual bool logging_failed() const = 0;
+
+    virtual void vehicle_was_disarmed() { };
 
 protected:
     uint32_t dropped;

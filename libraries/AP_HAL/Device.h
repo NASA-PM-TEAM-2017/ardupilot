@@ -38,7 +38,7 @@ public:
         SPEED_LOW,
     };
 
-    FUNCTOR_TYPEDEF(PeriodicCb, bool);
+    FUNCTOR_TYPEDEF(PeriodicCb, void);
     typedef void* PeriodicHandle;
 
     Device(enum BusType type)
@@ -51,17 +51,27 @@ public:
         return _bus_id.devid_s.bus_type;
     }
 
+    // return bus number
+    uint8_t bus_num(void) const {
+        return _bus_id.devid_s.bus;
+    }
+
     // return 24 bit bus identifier
     uint32_t get_bus_id(void) const {
         return _bus_id.devid;
+    }
+
+    // return address on bus
+    uint8_t get_bus_address(void) const {
+        return _bus_id.devid_s.address;
     }
 
     // set device type within a device class (eg. AP_COMPASS_TYPE_LSM303D)
     void set_device_type(uint8_t devtype) {
         _bus_id.devid_s.devtype = devtype;
     }
-    
-    
+
+
     virtual ~Device() {
         if (_checked.regs != nullptr) {
             delete[] _checked.regs;
@@ -121,16 +131,17 @@ public:
     void set_checked_register(uint8_t reg, uint8_t val);
 
     /**
-     * setup for register value checking
+     * setup for register value checking. Frequency is how often to check registers. If set to 10 then
+     * every 10th call to check_next_register will check a register
      */
-    bool setup_checked_registers(uint8_t num_regs);
+    bool setup_checked_registers(uint8_t num_regs, uint8_t frequency=10);
 
     /**
      * check next register value for correctness. Return false if value is incorrect
      * or register checking has not been setup
      */
     bool check_next_register(void);
-    
+
     /**
      * Wrapper function over #transfer() to read a sequence of bytes from
      * device. No value is written, differently from the #read_registers()
@@ -168,7 +179,7 @@ public:
      * #register_periodic_callback. Note that the time will be re-calculated
      * from the moment this call is made and expire after @period_usec.
      *
-     * Return: true if periodic callback was sucessfully adjusted, false otherwise.
+     * Return: true if periodic callback was successfully adjusted, false otherwise.
      */
     virtual bool adjust_periodic_callback(PeriodicHandle h, uint32_t period_usec) = 0;
 
@@ -179,6 +190,13 @@ public:
      * otherwise.
      */
     virtual bool unregister_callback(PeriodicHandle h) { return false; }
+
+    /*
+     * support for direct control of SPI chip select. Needed for
+     * devices with unusual SPI transfer patterns that include
+     * specific delays
+     */
+    virtual bool set_chip_select(bool set) { return false; }
 
     /**
      * Some devices connected on the I2C or SPI bus require a bit to be set on
@@ -222,7 +240,10 @@ public:
     uint32_t get_bus_id_devtype(uint8_t devtype) {
         return change_bus_id(get_bus_id(), devtype);
     }
-    
+
+    /* set number of retries on transfers */
+    virtual void set_retries(uint8_t retries) {};
+
 protected:
     uint8_t _read_flag = 0;
 
@@ -243,7 +264,7 @@ protected:
         struct DeviceStructure devid_s;
         uint32_t devid;
     };
-    
+
     union DeviceId _bus_id;
 
     // set device address (eg. i2c bus address or spi CS)
@@ -266,6 +287,8 @@ private:
         uint8_t n_allocated;
         uint8_t n_set;
         uint8_t next;
+        uint8_t frequency;
+        uint8_t counter;
         struct checkreg *regs;
     } _checked;
 };

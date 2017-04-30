@@ -7,7 +7,6 @@
 
 class GCS_MAVLINK_Rover : public GCS_MAVLINK
 {
-
 public:
 
     void data_stream_send(void) override;
@@ -15,6 +14,7 @@ public:
 protected:
 
     uint32_t telem_delay() const override;
+    bool accept_packet(const mavlink_status_t &status, mavlink_message_t &msg) override;
 
 private:
 
@@ -22,5 +22,4 @@ private:
     bool handle_guided_request(AP_Mission::Mission_Command &cmd) override;
     void handle_change_alt_request(AP_Mission::Mission_Command &cmd) override;
     bool try_send_message(enum ap_message id) override;
-
 };

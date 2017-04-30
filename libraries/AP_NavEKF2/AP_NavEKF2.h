@@ -1,5 +1,8 @@
 /*
-  24 state EKF based on https://github.com/priseborough/InertialNav
+  24 state EKF based on the derivation in https://github.com/priseborough/
+  InertialNav/blob/master/derivations/RotationVectorAttitudeParameterisation/
+  GenerateNavFilterEquations.m
+
   Converted from Matlab to C++ by Paul Riseborough
 
   EKF Tuning parameters refactored by Tom Cauchois
@@ -26,7 +29,6 @@
 #include <AP_Baro/AP_Baro.h>
 #include <AP_Airspeed/AP_Airspeed.h>
 #include <AP_Compass/AP_Compass.h>
-#include <AP_NavEKF/AP_Nav_Common.h>
 #include <AP_RangeFinder/AP_RangeFinder.h>
 
 class NavEKF2_core;
@@ -163,7 +165,7 @@ public:
     // All NED positions calcualted by the filter will be relative to this location
     // The origin cannot be set if the filter is in a flight mode (eg vehicle armed)
     // Returns false if the filter has rejected the attempt to set the origin
-    bool setOriginLLH(struct Location &loc);
+    bool setOriginLLH(const Location &loc);
 
     // return estimated height above ground level
     // return false if ground height is not being estimated.
@@ -177,7 +179,7 @@ public:
     void getRotationBodyToNED(Matrix3f &mat) const;
 
     // return the quaternions defining the rotation from NED to XYZ (body) axes
-    void getQuaternion(Quaternion &quat) const;
+    void getQuaternion(int8_t instance, Quaternion &quat) const;
 
     // return the innovations for the specified instance
     // An out of range instance (eg -1) returns data for the the primary instance
@@ -206,6 +208,19 @@ public:
     // return data for debugging optical flow fusion for the specified instance
     // An out of range instance (eg -1) returns data for the the primary instance
     void getFlowDebug(int8_t instance, float &varFlow, float &gndOffset, float &flowInnovX, float &flowInnovY, float &auxInnov, float &HAGL, float &rngInnov, float &range, float &gndOffsetErr);
+
+    /*
+        Returns the following data for debugging range beacon fusion from the specified instance
+        An out of range instance (eg -1) returns data for the the primary instance
+        ID : beacon identifier
+        rng : measured range to beacon (m)
+        innov : range innovation (m)
+        innovVar : innovation variance (m^2)
+        testRatio : innovation consistency test ratio
+        beaconPosNED : beacon NED position (m)
+        returns true if data could be found, false if it could not
+    */
+    bool getRangeBeaconDebug(int8_t instance, uint8_t &ID, float &rng, float &innov, float &innovVar, float &testRatio, Vector3f &beaconPosNED, float &offsetHigh, float &offsetLow);
 
     // called by vehicle code to specify that a takeoff is happening
     // causes the EKF to compensate for expected barometer errors due to ground effect
@@ -280,14 +295,24 @@ public:
     // returns the time of the last reset or 0 if no reset has ever occurred
     uint32_t getLastVelNorthEastReset(Vector2f &vel) const;
 
+    // return the amount of vertical position change due to the last reset in metres
+    // returns the time of the last reset or 0 if no reset has ever occurred
+    uint32_t getLastPosDownReset(float &posDelta);
+
     // report any reason for why the backend is refusing to initialise
     const char *prearm_failure_reason(void) const;
+
+    // set and save the _baroAltNoise parameter
+    void set_baro_alt_noise(float noise) { _baroAltNoise.set_and_save(noise); };
 
     // allow the enable flag to be set by Replay
     void set_enable(bool enable) { _enable.set(enable); }
 
     // are we doing sensor logging inside the EKF?
     bool have_ekf_logging(void) const { return logging.enabled && _logging_mask != 0; }
+
+    // get timing statistics structure
+    void getTimingStatistics(int8_t instance, struct ekf_timing &timing);
     
 private:
     uint8_t num_cores; // number of allocated cores
@@ -302,7 +327,7 @@ private:
     AP_Float _gpsHorizVelNoise;     // GPS horizontal velocity measurement noise : m/s
     AP_Float _gpsVertVelNoise;      // GPS vertical velocity measurement noise : m/s
     AP_Float _gpsHorizPosNoise;     // GPS horizontal position measurement noise m
-    AP_Float _baroAltNoise;         // Baro height measurement noise : m^2
+    AP_Float _baroAltNoise;         // Baro height measurement noise : m
     AP_Float _magNoise;             // magnetometer measurement noise : gauss
     AP_Float _easNoise;             // equivalent airspeed measurement noise : m/s
     AP_Float _windVelProcessNoise;  // wind velocity state process noise : m/s^2
@@ -339,8 +364,13 @@ private:
     AP_Float _yawNoise;             // magnetic yaw measurement noise : rad
     AP_Int16 _yawInnovGate;         // Percentage number of standard deviations applied to magnetic yaw innovation consistency check
     AP_Int8 _tauVelPosOutput;       // Time constant of output complementary filter : csec (centi-seconds)
-    AP_Int8 _useRngSwHgt;           // Maximum valid range of the range finder in metres
+    AP_Int8 _useRngSwHgt;           // Maximum valid range of the range finder as a percentage of the maximum range specified by the sensor driver
     AP_Float _terrGradMax;          // Maximum terrain gradient below the vehicle
+    AP_Float _rngBcnNoise;          // Range beacon measurement noise (m)
+    AP_Int16 _rngBcnInnovGate;      // Percentage number of standard deviations applied to range beacon innovation consistency check
+    AP_Int8  _rngBcnDelay_ms;       // effective average delay of range beacon measurements rel to IMU (msec)
+    AP_Float _useRngSwSpd;          // Maximum horizontal ground speed to use range finder as the primary height source (m/s)
+    AP_Int8 _magMask;               // Bitmask forcng specific EKF core instances to use simple heading magnetometer fusion.
 
     // Tuning parameters
     const float gpsNEVelVarAccScale;    // Scale factor applied to NE velocity measurement variance due to manoeuvre acceleration
@@ -348,9 +378,9 @@ private:
     const float gpsPosVarAccScale;      // Scale factor applied to horizontal position measurement variance due to manoeuvre acceleration
     const uint16_t magDelay_ms;         // Magnetometer measurement delay (msec)
     const uint16_t tasDelay_ms;         // Airspeed measurement delay (msec)
-    const uint16_t gpsRetryTimeUseTAS_ms;  // GPS retry time with airspeed measurements (msec)
-    const uint16_t gpsRetryTimeNoTAS_ms;   // GPS retry time without airspeed measurements (msec)
-    const uint16_t gpsFailTimeWithFlow_ms; // If we have no GPs for longer than this and we have optical flow, then we will switch across to using optical flow (msec)
+    const uint16_t tiltDriftTimeMax_ms;    // Maximum number of ms allowed without any form of tilt aiding (GPS, flow, TAS, etc)
+    const uint16_t posRetryTimeUseVel_ms;  // Position aiding retry time with velocity measurements (msec)
+    const uint16_t posRetryTimeNoVel_ms;   // Position aiding retry time without velocity measurements (msec)
     const uint16_t hgtRetryTimeMode0_ms;   // Height retry time with vertical velocity measurement (msec)
     const uint16_t hgtRetryTimeMode12_ms;  // Height retry time without vertical velocity measurement (msec)
     const uint16_t tasRetryTime_ms;     // True airspeed timeout and retry interval (msec)
@@ -395,15 +425,27 @@ private:
         Vector2f core_delta;          // the amount of NE position change between cores when a change happened
     } pos_reset_data;
 
+    struct {
+        uint32_t last_function_call;  // last time getLastPosDownReset was called
+        bool core_changed;            // true when a core change happened and hasn't been consumed, false otherwise
+        uint32_t last_primary_change; // last time a primary has changed
+        float core_delta;             // the amount of D position change between cores when a change happened
+    } pos_down_reset_data;
+
+    bool runCoreSelection; // true when the primary core has stabilised and the core selection logic can be started
+
     // update the yaw reset data to capture changes due to a lane switch
-    // has_switched - true if the primary instance has already been changed during this filter update cycle
     // new_primary - index of the ekf instance that we are about to switch to as the primary
     // old_primary - index of the ekf instance that we are currently using as the primary
-    void updateLaneSwitchYawResetData(bool has_switched, uint8_t new_primary, uint8_t old_primary);
+    void updateLaneSwitchYawResetData(uint8_t new_primary, uint8_t old_primary);
 
     // update the position reset data to capture changes due to a lane switch
-    // has_switched - true if the primary instance has already been changed during this filter update cycle
     // new_primary - index of the ekf instance that we are about to switch to as the primary
     // old_primary - index of the ekf instance that we are currently using as the primary
-    void updateLaneSwitchPosResetData(bool has_switched, uint8_t new_primary, uint8_t old_primary);
+    void updateLaneSwitchPosResetData(uint8_t new_primary, uint8_t old_primary);
+
+    // update the position down reset data to capture changes due to a lane switch
+    // new_primary - index of the ekf instance that we are about to switch to as the primary
+    // old_primary - index of the ekf instance that we are currently using as the primary
+    void updateLaneSwitchPosDownResetData(uint8_t new_primary, uint8_t old_primary);
 };

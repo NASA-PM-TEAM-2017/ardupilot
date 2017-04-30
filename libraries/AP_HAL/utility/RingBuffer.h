@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <stdbool.h>
 #include <stdint.h>
 
 /*
@@ -103,6 +102,12 @@ public:
     }
     ~ObjectBuffer(void) {
         delete buffer;
+    }
+
+    // Discards the buffer content, emptying it.
+    void clear(void)
+    {
+        buffer->clear();
     }
 
     // return number of objects available to be read
@@ -228,6 +233,12 @@ public:
         head = (head+1) % size;
         count--;
         return true;
+    }
+
+    // Discards the buffer content, emptying it.
+    void clear(void)
+    {
+        head = count = 0;
     }
 
     /*

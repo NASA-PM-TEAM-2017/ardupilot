@@ -16,7 +16,7 @@ void Copter::update_home_from_EKF()
     }
 
     // special logic if home is set in-flight
-    if (motors.armed()) {
+    if (motors->armed()) {
         set_home_to_current_location_inflight();
     } else {
         // move home to current ekf location (this will set home_state to HOME_SET)
@@ -73,6 +73,18 @@ bool Copter::set_home(const Location& loc)
 {
     // check location is valid
     if (loc.lat == 0 && loc.lng == 0) {
+        return false;
+    }
+
+    // set EKF origin to home if it hasn't been set yet and vehicle is disarmed
+    // this is required to allowing flying in AUTO and GUIDED with only an optical flow
+    Location ekf_origin;
+    if (!motors->armed() && !ahrs.get_origin(ekf_origin)) {
+        ahrs.set_origin(loc);
+    }
+
+    // check home is close to EKF origin
+    if (far_from_EKF_origin(loc)) {
         return false;
     }
 

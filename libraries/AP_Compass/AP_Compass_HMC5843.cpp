@@ -98,8 +98,8 @@ AP_Compass_HMC5843::AP_Compass_HMC5843(Compass &compass, AP_HMC5843_BusDriver *b
                                        bool force_external, enum Rotation rotation)
     : AP_Compass_Backend(compass)
     , _bus(bus)
-    , _force_external(force_external)
     , _rotation(rotation)
+    , _force_external(force_external)
 {
 }
 
@@ -159,6 +159,9 @@ bool AP_Compass_HMC5843::init()
         return false;
     }
 
+    // high retries for init
+    _bus->set_retries(10);
+    
     if (!_bus->configure()) {
         hal.console->printf("HMC5843: Could not configure the bus\n");
         goto errout;
@@ -185,6 +188,9 @@ bool AP_Compass_HMC5843::init()
 
     _initialised = true;
 
+    // lower retries for run
+    _bus->set_retries(3);
+    
     bus_sem->give();
 
     // perform an initial read
@@ -203,7 +209,7 @@ bool AP_Compass_HMC5843::init()
 
     // read from sensor at 75Hz
     _bus->register_periodic_callback(13333,
-                                     FUNCTOR_BIND_MEMBER(&AP_Compass_HMC5843::_timer, bool));
+                                     FUNCTOR_BIND_MEMBER(&AP_Compass_HMC5843::_timer, void));
 
     hal.console->printf("HMC5843 found on bus 0x%x\n", _bus->get_bus_id());
     
@@ -219,7 +225,7 @@ errout:
  *
  * bus semaphore has been taken already by HAL
  */
-bool AP_Compass_HMC5843::_timer()
+void AP_Compass_HMC5843::_timer()
 {
     bool result = _read_sample();
 
@@ -227,7 +233,7 @@ bool AP_Compass_HMC5843::_timer()
     _take_sample();
     
     if (!result) {
-        return true;
+        return;
     }
 
     uint32_t tnow = AP_HAL::micros();    
@@ -255,7 +261,7 @@ bool AP_Compass_HMC5843::_timer()
     // correct raw_field for known errors
     correct_field(raw_field, _compass_instance);
     
-    if (_sem->take(0)) {
+    if (_sem->take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
         _mag_x_accum += raw_field.x;
         _mag_y_accum += raw_field.y;
         _mag_z_accum += raw_field.z;
@@ -268,8 +274,6 @@ bool AP_Compass_HMC5843::_timer()
         }
         _sem->give();
     }
-    
-    return true;
 }
 
 /*

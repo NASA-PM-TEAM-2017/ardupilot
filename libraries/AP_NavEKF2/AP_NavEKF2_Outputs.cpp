@@ -39,25 +39,19 @@ bool NavEKF2_core::healthy(void) const
     return true;
 }
 
-// Return a consolidated fault score where higher numbers are less healthy
+// Return a consolidated error score where higher numbers represent larger errors
 // Intended to be used by the front-end to determine which is the primary EKF
-float NavEKF2_core::faultScore(void) const
+float NavEKF2_core::errorScore() const
 {
     float score = 0.0f;
-    // If velocity, position or height measurements are failing consistency checks, this adds to the score
-    if (velTestRatio > 1.0f) {
-        score += velTestRatio-1.0f;
-    }
-    if (posTestRatio > 1.0f) {
-        score += posTestRatio-1.0f;
-    }
-    if (hgtTestRatio > 1.0f) {
-        score += hgtTestRatio-1.0f;
-    }
-    // If the tilt error is excessive this adds to the score
-    const float tiltErrThreshold = 0.05f;
-    if (tiltAlignComplete && yawAlignComplete && tiltErrFilt > tiltErrThreshold) {
-        score += tiltErrFilt / tiltErrThreshold;
+    if (tiltAlignComplete && yawAlignComplete) {
+        // Check GPS fusion performance
+        score = MAX(score, 0.5f * (velTestRatio + posTestRatio));
+        // Check altimeter fusion performance
+        score = MAX(score, hgtTestRatio);
+        // Check attitude corrections
+        const float tiltErrThreshold = 0.05f;
+        score = MAX(score, tiltErrFilt / tiltErrThreshold);
     }
     return score;
 }
@@ -76,6 +70,32 @@ void NavEKF2_core::getFlowDebug(float &varFlow, float &gndOffset, float &flowInn
     gndOffsetErr = sqrtf(Popt); // note Popt is constrained to be non-negative in EstimateTerrainOffset()
 }
 
+// return data for debugging range beacon fusion one beacon at a time, incrementing the beacon index after each call
+bool NavEKF2_core::getRangeBeaconDebug(uint8_t &ID, float &rng, float &innov, float &innovVar, float &testRatio, Vector3f &beaconPosNED, float &offsetHigh, float &offsetLow)
+{
+    // if the states have not been initialised or we have not received any beacon updates then return zeros
+    if (!statesInitialised || N_beacons == 0) {
+        return false;
+    }
+
+    // Ensure that beacons are not skipped due to calling this function at a rate lower than the updates
+    if (rngBcnFuseDataReportIndex >= N_beacons) {
+        rngBcnFuseDataReportIndex = 0;
+    }
+
+    // Output the fusion status data for the specified beacon
+    ID = rngBcnFuseDataReportIndex;                                             // beacon identifier
+    rng = rngBcnFusionReport[rngBcnFuseDataReportIndex].rng;                    // measured range to beacon (m)
+    innov = rngBcnFusionReport[rngBcnFuseDataReportIndex].innov;                // range innovation (m)
+    innovVar = rngBcnFusionReport[rngBcnFuseDataReportIndex].innovVar;          // innovation variance (m^2)
+    testRatio = rngBcnFusionReport[rngBcnFuseDataReportIndex].testRatio;        // innovation consistency test ratio
+    beaconPosNED = rngBcnFusionReport[rngBcnFuseDataReportIndex].beaconPosNED;  // beacon NED position
+    offsetHigh = bcnPosOffsetMax;                                               // beacon system vertical pos offset upper estimate
+    offsetLow = bcnPosOffsetMin;                                                // beacon system vertical pos offset lower estimate
+    rngBcnFuseDataReportIndex++;
+    return true;
+}
+
 // provides the height limit to be observed by the control loops
 // returns false if no height limiting is required
 // this is needed to ensure the vehicle does not fly too high when using optical flow navigation
@@ -84,7 +104,7 @@ bool NavEKF2_core::getHeightControlLimit(float &height) const
     // only ask for limiting if we are doing optical flow navigation
     if (frontend->_fusionModeGPS == 3) {
         // If are doing optical flow nav, ensure the height above ground is within range finder limits after accounting for vehicle tilt and control errors
-        height = MAX(float(frontend->_rng.max_distance_cm()) * 0.007f - 1.0f, 1.0f);
+        height = MAX(float(frontend->_rng.max_distance_cm_orient(ROTATION_PITCH_270)) * 0.007f - 1.0f, 1.0f);
         // If we are are not using the range finder as the height reference, then compensate for the difference between terrain and EKF origin
         if (frontend->_altSource != 1) {
             height -= terrainState;
@@ -160,6 +180,14 @@ uint32_t NavEKF2_core::getLastPosNorthEastReset(Vector2f &pos) const
     return lastPosReset_ms;
 }
 
+// return the amount of vertical position change due to the last vertical position reset in metres
+// returns the time of the last reset or 0 if no reset has ever occurred
+uint32_t NavEKF2_core::getLastPosDownReset(float &posD) const
+{
+    posD = posResetD;
+    return lastPosResetD_ms;
+}
+
 // return the amount of NE velocity change due to the last velocity reset in metres/sec
 // returns the time of the last reset or 0 if no reset has ever occurred
 uint32_t NavEKF2_core::getLastVelNorthEastReset(Vector2f &vel) const
@@ -229,6 +257,11 @@ bool NavEKF2_core::getPosNE(Vector2f &posNE) const
                 Vector2f tempPosNE = location_diff(EKF_origin, gpsloc);
                 posNE.x = tempPosNE.x;
                 posNE.y = tempPosNE.y;
+                return false;
+            } else if (rngBcnAlignmentStarted) {
+                // If we are attempting alignment using range beacon data, then report the position
+                posNE.x = receiverPos.x;
+                posNE.y = receiverPos.y;
                 return false;
             } else {
                 // If no GPS fix is available, all we can do is provide the last known position
@@ -473,6 +506,7 @@ void  NavEKF2_core::getFilterGpsStatus(nav_gps_status &faults) const
     // set individual flags
     faults.flags.bad_sAcc           = gpsCheckStatus.bad_sAcc; // reported speed accuracy is insufficient
     faults.flags.bad_hAcc           = gpsCheckStatus.bad_hAcc; // reported horizontal position accuracy is insufficient
+    faults.flags.bad_vAcc           = gpsCheckStatus.bad_vAcc; // reported vertical position accuracy is insufficient
     faults.flags.bad_yaw            = gpsCheckStatus.bad_yaw; // EKF heading accuracy is too large for GPS use
     faults.flags.bad_sats           = gpsCheckStatus.bad_sats; // reported number of satellites is insufficient
     faults.flags.bad_horiz_drift    = gpsCheckStatus.bad_horiz_drift; // GPS horizontal drift is too large to start using GPS (check assumes vehicle is static)
