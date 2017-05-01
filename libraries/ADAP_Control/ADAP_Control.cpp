@@ -32,19 +32,19 @@ const AP_Param::GroupInfo ADAP_Control::var_info[] = {
 	AP_GROUPINFO_FLAGS("CH", 1, ADAP_Control, enable_chan, 0, AP_PARAM_FLAG_ENABLE),
 	AP_GROUPINFO("AL",       2, ADAP_Control, alpha, 24),
 	AP_GROUPINFO("GAMT",     3, ADAP_Control, gamma_theta, 1000),
-    AP_GROUPINFO("GAMW",     4, ADAP_Control, gamma_omega, 1000),
-    AP_GROUPINFO("GAMS",     5, ADAP_Control, gamma_sigma, 1000),
+        AP_GROUPINFO("GAMW",     4, ADAP_Control, gamma_omega, 1000),
+        AP_GROUPINFO("GAMS",     5, ADAP_Control, gamma_sigma, 1000),
 	AP_GROUPINFO("THU",      6, ADAP_Control, theta_max, 2.0),
 	AP_GROUPINFO("THL",      7, ADAP_Control, theta_min, 0.5),
 	AP_GROUPINFO("THE",      8, ADAP_Control, theta_epsilon, 5925),
-    AP_GROUPINFO("OMU",      9, ADAP_Control, omega_max, 2.0),
+        AP_GROUPINFO("OMU",      9, ADAP_Control, omega_max, 2.0),
 	AP_GROUPINFO("OML",     10, ADAP_Control, omega_min, 0.5),
 	AP_GROUPINFO("OME",     11, ADAP_Control, omega_epsilon, 5925),
-    AP_GROUPINFO("SIGU",    12, ADAP_Control, sigma_max, 0.1),
+        AP_GROUPINFO("SIGU",    12, ADAP_Control, sigma_max, 0.1),
 	AP_GROUPINFO("SIGL",    13, ADAP_Control, sigma_min, -0.1),
 	AP_GROUPINFO("SIGE",    14, ADAP_Control, sigma_epsilon, 203),
 	AP_GROUPINFO("W0",      15, ADAP_Control, w0, 25),
-    AP_GROUPINFO("K",       16, ADAP_Control, k, 0.1),
+        AP_GROUPINFO("K",       16, ADAP_Control, k, 0.45),
 	AP_GROUPINFO("KG",      17, ADAP_Control, kg, 1.0),
     
 	AP_GROUPEND
@@ -82,11 +82,12 @@ void ADAP_Control::reset(uint16_t loop_rate_hz)
 /*
   trapezoidal integration helper function
  */
-float ADAP_Control::trapezoidal_integration(float y_dot, float dt, float &y1)
+float ADAP_Control::trapezoidal_integration(float y0, float y1_dot, float dt, float &y0_dot)
 {
-    float y = y1 + dt*y_dot; //Euler Integration
-    y1 += (dt/2)*(y+y_dot); //Trapezoidal
-    return y1;
+    float y1 = y0 + (dt/2)*(y0_dot+y1_dot);
+    y0_dot = y1_dot;
+    
+    return y1;   
 }
 
 /*
@@ -121,9 +122,10 @@ float ADAP_Control::update(uint16_t loop_rate_hz, float target_rate, float senso
     bool saturated = ((out < 0 && u_lowpass >= 0.99*out_limit) ||
                       (out > 0 && u_lowpass <= -0.99*out_limit));
     
-    //kD(s)
+    //kD(s) (simple integrator + cascaded second order low pass)
     if (!saturated) {
-        integrator += dt*(out);
+        //integrator += dt*out;
+	integrator = trapezoidal_integration(integrator, out, dt, out1);
     }
     u = constrain_float(-k*integrator,-out_limit,out_limit); // C(s)= wk/(s+wk) -> k sets the first order low pass response
 
@@ -152,9 +154,12 @@ float ADAP_Control::update(uint16_t loop_rate_hz, float target_rate, float senso
 			    
     // Parameter Update using Trapezoidal integration                 
     if (!saturated) {
-        theta = trapezoidal_integration(theta_dot, dt, theta1);
-        omega = trapezoidal_integration(omega_dot, dt, omega1);
-        sigma = trapezoidal_integration(sigma_dot, dt, sigma1);
+        //theta += dt*theta_dot;
+        //omega += dt*omega_dot;
+        //sigma += dt*sigma_dot;
+	theta = trapezoidal_integration(theta, theta_dot, dt, theta1);
+	omega = trapezoidal_integration(omega, omega_dot, dt, omega1);
+	sigma = trapezoidal_integration(sigma, sigma_dot, dt, sigma1);
     }
 
     theta = constrain_float(theta, theta_min, theta_max);

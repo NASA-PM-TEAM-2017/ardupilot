@@ -15,10 +15,9 @@
 
 //	Code by Jon Challinger
 //  Modified by Paul Riseborough
-//  Adaptive Control by Ryan Beall
+//
 
 #include <AP_HAL/AP_HAL.h>
-#include <GCS_MAVLink/GCS.h>
 #include "AP_RollController.h"
 
 extern const AP_HAL::HAL& hal;
@@ -118,11 +117,6 @@ int32_t AP_RollController::_get_rate_out(float desired_rate, float scaler, bool 
         desired_rate = gains.rmax;
     }
 	
-	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700) {
-	  // the user has enabled adaptive control test code
-	  return adaptive_control(desired_rate);
-	}
-
     // Get body rate vector (radians/sec)
 	float omega_x = _ahrs.get_gyro().x;
 	
@@ -239,166 +233,3 @@ void AP_RollController::adaptive_tuning_send(mavlink_channel_t chan)
     adap_control.adaptive_tuning_send(chan, PID_TUNING_PITCH);
 }
 
-/*
-  adaptive control test code. Maths thanks to Ryan Beall
-*/
-float AP_RollController::adaptive_control(float r)
-{
-    // r = command
-    // x = actual state value from sensor (i.e. pitch rate from gyro)
-    // x_m = estimated model output (i.e. estimated pitch rate given state predictor estimates)
-    // u = commanded output (i.e. delta elevator) (radians)
-    // u_sp = command to state predictor (radians)
-    // u_lowpass = low passed commanded output within the bandwith of the actuator (radians)
-    // theta = estimated state from state predictor (unitless)
-    // omega = estimated state from state predictor (unitless)
-    // sigma = estimated state from state predictor (unitless)
-    // theta_max = constraint on states to ensure robustness (unitless)
-    // theta_min = constraint on states to ensure robustness (unitless)
-    // omega_max = constraint on states to ensure robustness (unitless)
-    // omega_min = constraint on states to ensure robustness (unitless)
-    // sigma_max = constraint on states to ensure robustness (unitless)
-    // sigma_min = constraint on states to ensure robustness (unitless)
-    // epsilon = slope of projection operator (needs to be commensurate with gain and function)
-    // integrator = 1/S standard discrete integrator
-
-    float dt;
- 
-    float x =_ahrs.get_gyro().x; //radians
-    adap.r = radians(r); //convert desired input into radians if required
-
-    //reset reference model at initialization
-    uint64_t now = AP_HAL::micros64();
-    if (adap.last_run_us == 0 || now - adap.last_run_us > 200000UL) {
-        // reset after not running for 0.2s
-        adap.x_m = x;       
-        adap.u = 0.0;
-        adap.u_lowpass = 0.0;
-	adap.u_sp = 0.0;
-        adap.theta = 1.0;
-        adap.omega = 1.0;
-        adap.sigma = 0.0;
-	adap.integrator = 0.0;
-        adap.last_run_us = now;
-	float cutoff_hz = adap.w0/(2*M_PI); //convert cutoff freq from rad/s to hz
-	adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),cutoff_hz);
-	adap.filter.reset();
-        return 0;
-    }    
-
-    dt = (now - adap.last_run_us) * 1.0e-6f;
-    adap.last_run_us = now;
-
-    
-    // u (controller output to plant)
-    adap.eta = adap.theta*x + adap.omega*adap.u_lowpass + adap.sigma;
-    adap.u_sp = adap.eta;
-    float out = constrain_float(adap.eta-(adap.kg*adap.r),-radians(90)/dt, radians(90)/dt);
-    //kD(s)
-    adap.integrator += dt*(out);  
-    adap.u = constrain_float(-adap.k*adap.integrator,-radians(45),radians(45)); // C(s)= wk/(s+wk) -> k sets the first order low pass response
-
-    // Additional cascaded second order low pass filter (strictly propper)
-    adap.filter.set_cutoff_frequency(1.0/_ahrs.get_ins().get_loop_delta_t(),adap.w0/(2*M_PI));
-    adap.u_lowpass = adap.filter.apply(adap.u); 
-    
-    // State Predictor (first order single pole recursive filter)
-    float alpha_filt = exp(-adap.alpha*dt); //alpha in rad/s 
-    alpha_filt = constrain_float(alpha_filt, 0.0, 1.0);
-    float beta_filt = 1-alpha_filt;  
-
-    adap.x_m = alpha_filt*adap.x_m + beta_filt*(adap.u_sp);
-       
-    float x_error = adap.x_m-x;
-    // Constrain error to +-300 deg/s
-    x_error = constrain_float(x_error,-radians(300), radians(300));
-
-    // Calculate solution to Lyapunov 1x1 matrix
-    float Pb = 1/(2*adap.alpha);
-
-    // Projection Operator
-    float theta_dot = projection_operator(adap.theta,-adap.gamma_theta*x_error*Pb*x,adap.theta_epsilon,adap.theta_max,adap.theta_min);
-    float omega_dot = projection_operator(adap.omega,-adap.gamma_omega*x_error*Pb*adap.u_lowpass,adap.omega_epsilon,adap.omega_max,adap.omega_min);
-    float sigma_dot = projection_operator(adap.sigma,-adap.gamma_sigma*x_error*Pb,adap.sigma_epsilon,adap.sigma_max,adap.sigma_min);
-			    
-    // Parameter Update using Trapezoidal integration                 
-    adap.theta += dt*(theta_dot);
-    adap.omega += dt*(omega_dot);
-    adap.sigma += dt*(sigma_dot);
-
-    adap.theta = constrain_float(adap.theta, adap.theta_min, adap.theta_max);
-    adap.omega = constrain_float(adap.omega, adap.omega_min, adap.omega_max);
-    adap.sigma = constrain_float(adap.sigma, adap.sigma_min, adap.sigma_max);
-     
-
-    // for ADAP_TUNING message
-    adap.theta_dot = theta_dot;
-    adap.omega_dot = omega_dot;
-    adap.sigma_dot = sigma_dot;
-    adap.x_error = x_error;
-
-    DataFlash_Class::instance()->Log_Write("ADAP", "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,Au_lowpass", "Qffffffffff",
-                                           now,
-                                           dt,
-                                           adap.theta, 
-                                           adap.omega,
-                                           adap.sigma,
-                                           adap.eta,
-                                           degrees(adap.x_m),
-                                           degrees(x),
-                                           degrees(r),
-                                           degrees(x_error),
-                                           degrees(adap.u_lowpass));
-
-
-    _pid_info.P = adap.theta;
-    _pid_info.I = adap.sigma;
-    _pid_info.FF = adap.x_m;
-    _pid_info.D = x_error;
-    _pid_info.desired = r;
-    
-     return degrees(constrain_float(adap.u_lowpass,radians(-45), radians(45)))*100;
-}
-
-
-float AP_RollController::projection_operator(float theta, float y, float epsilon, float theta_max, float theta_min)
-{
-	// Calculate convex function
-	// Nominal un-saturated value is above zero line on a parabolic curve
-	// Steepness of curve is set by epsilon
-	float f_diff2 = (theta_max-theta_min)*(theta_max-theta_min);
-	float f_theta = (-4*(theta_min-theta)*(theta_max-theta))/(epsilon*f_diff2);
-	float f_theta_dot = (4*(theta_min+theta_max-(2*theta)))/(epsilon*f_diff2);	
-
-	float projection_out = y;
-
-	if (f_theta <= 0 && f_theta_dot*y < 0)
-	{
-		projection_out = y*(f_theta+1); //y-(y*(-1*f_theta));
-	}	
- 
-   	return projection_out;
-}
-
-/*
-  send ADAP_TUNING message
-*/
-void AP_RollController::adaptive_tuning_send(mavlink_channel_t chan)
-{
-	if (adap.enable_chan > 0 && hal.rcin->read(adap.enable_chan-1) >= 1700 &&
-        HAVE_PAYLOAD_SPACE(chan, ADAP_TUNING)) {
-        mavlink_msg_adap_tuning_send(chan, PID_TUNING_ROLL, 
-                                     adap.r,
-                                     _ahrs.get_gyro().x,
-                                     adap.x_error,
-                                     adap.theta,
-                                     adap.omega,
-                                     adap.sigma,
-                                     adap.theta_dot,
-                                     adap.omega_dot,
-                                     adap.sigma_dot,
-                                     adap.x_m,	
-                                     adap.u_lowpass,
-                                     adap.u);
-    }
-}
