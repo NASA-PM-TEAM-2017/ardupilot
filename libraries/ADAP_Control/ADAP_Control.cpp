@@ -98,10 +98,10 @@ float ADAP_Control::trapezoidal_integration(float y0, float y1_dot, float dt, fl
 float ADAP_Control::update(uint16_t loop_rate_hz, float target_rate, float sensor_rate, float scaler)
 {
     float dt;
-    const float out_limit = radians(45);
+    const float out_limit = radians(45); // radians
     
-    x = sensor_rate;
-    r = target_rate;
+    x = sensor_rate; // radians/s
+    r = target_rate; // radians/s
 
     //reset reference model at initialization
     uint64_t now = AP_HAL::micros64();
@@ -119,12 +119,12 @@ float ADAP_Control::update(uint16_t loop_rate_hz, float target_rate, float senso
     u_sp = eta;
 
     float out = constrain_float(eta-(kg*r),-radians(90)/dt, radians(90)/dt);
+
     bool saturated = ((out < 0 && u_lowpass >= 0.99*out_limit) ||
                       (out > 0 && u_lowpass <= -0.99*out_limit));
     
     //kD(s) (simple integrator + cascaded second order low pass)
     if (!saturated) {
-        //integrator += dt*out;
 	integrator = trapezoidal_integration(integrator, out, dt, out1);
     }
     u = constrain_float(-k*integrator,-out_limit,out_limit); // C(s)= wk/(s+wk) -> k sets the first order low pass response
@@ -154,24 +154,17 @@ float ADAP_Control::update(uint16_t loop_rate_hz, float target_rate, float senso
 			    
     // Parameter Update using Trapezoidal integration                 
     if (!saturated) {
-        //theta += dt*theta_dot;
-        //omega += dt*omega_dot;
-        //sigma += dt*sigma_dot;
 	theta = trapezoidal_integration(theta, theta_dot, dt, theta1);
 	omega = trapezoidal_integration(omega, omega_dot, dt, omega1);
 	sigma = trapezoidal_integration(sigma, sigma_dot, dt, sigma1);
     }
-
+    
+    // Failsafe Constraint
     theta = constrain_float(theta, theta_min, theta_max);
     omega = constrain_float(omega, omega_min, omega_max);
     sigma = constrain_float(sigma, sigma_min, sigma_max);
      
-    // for ADAP_TUNING message
-    theta_dot = theta_dot;
-    omega_dot = omega_dot;
-    sigma_dot = sigma_dot;
-    x_error = x_error;
-
+    // Log to DataFlash
     DataFlash_Class::instance()->Log_Write(log_msg_name, "TimeUS,Dt,Atheta,Aomega,Asigma,Aeta,Axm,Ax,Ar,Axerr,AuL", "Qffffffffff",
                                            now,
                                            dt,
@@ -184,13 +177,6 @@ float ADAP_Control::update(uint16_t loop_rate_hz, float target_rate, float senso
                                            degrees(r),
                                            degrees(x_error),
                                            degrees(u_lowpass));
-    if (pid_info) {
-        pid_info->P = theta;
-        pid_info->I = sigma;
-        pid_info->FF = x_m;
-        pid_info->D = x_error;
-        pid_info->desired = r;
-    }
     
     return constrain_float(u_lowpass/out_limit, -1, 1);
 }
